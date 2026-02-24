@@ -1,0 +1,339 @@
+# Minimal unified config
+# - convert_to_lerobot.py reads `convert`
+# - train_act.py reads `train_act`
+
+shared:
+  seed: 42
+  device: "cuda"
+
+convert:
+  input_data_dir: "./keyboard_gaze_dataset"
+  output_root_dir: "./lerobot_keyboard_gaze_dataset"
+  repo_id: "keyboard_gaze"
+  hdf5_layout: "state_action"
+
+  # HDF5 groups from recorder:
+  # - states:  /slaves/slave1|slave2
+  # - actions: /actions/slave1|slave2
+  arm_pairs:
+    - pair_name: "slave1"
+      state_label: "s1"
+      action_label: "a1"
+    - pair_name: "slave2"
+      state_label: "s2"
+      action_label: "a2"
+
+  # Keep observation key "image_middle" for downstream configs,
+  # but read the 3rd camera from /cameras/gaze.
+  cameras:
+    - "left"
+    - "right"
+    - name: "middle"
+      hdf5_name: "gaze"
+
+  state:
+    history_steps: 0
+    history_padding: "repeat"
+    fields:
+      - "positions"
+      - "efforts"
+
+train_act:
+  # Usually no need to set dataset.root/repo manually.
+  # They are auto-inherited from convert.output_root_dir / convert.repo_id.
+  train:
+    steps: 50000
+    lr: 1e-5
+    log_freq: 1000
+    grad_clip_norm: 10.0
+
+  # 训练 DataLoader 超参数（batch_size 在这里）
+  dataloader:
+    batch_size: 8
+    num_workers: 4
+    shuffle: true
+    drop_last: true
+    pin_memory: true
+
+  policy:
+    chunk_size: 100
+    n_action_steps: 100
+
+  # 可选图像增强
+  transform:
+    gaussian_noise:
+      enable: false
+      mean: 0.0
+      std: 0.02
+    clamp:
+      enable: false
+      min: 0.0
+      max: 1.0
+
+  checkpoint:
+    dir: "./keyboard_gaze_checkpoint"
+    save_every_steps: 10000
+    save_on_train_end: true
+    max_to_keep: 5
+    auto_resume: true
+    auto_resume_scan_output: true
+    resume_from: ""
+
+  loss_plot:
+    enable: false
+    dir: "./output_keyboard_gaze/loss_trend"
+    filename_prefix: "loss_trend"
+    save_on_checkpoint: true
+    save_on_train_end: true
+    checkpoint_subdir: false
+    checkpoint_subdir_prefix: "step"
+    smooth_window: 200
+    log_scale: false
+
+  output:
+    final_dir: "./output_keyboard_gaze"
+
+  deploy_export:
+    dir: "./output_keyboard_gaze"
+    export_on_checkpoint: true
+    export_on_train_end: true
+    backfill_historical_checkpoints: true
+    checkpoint_subdir: true
+    checkpoint_subdir_prefix: "step"
+    # 关闭 train_end 的额外快照子目录，避免生成大量 final_step_* 目录
+    export_train_end_snapshot: false
+    train_end_subdir_prefix: "final_step"
+
+  eval:
+    enable: false
+    episode_index: 0
+    batch_size: 1
+    num_workers: 4
+    use_train_transform: false
+
+# 直推理配置（给 ROS1 侧 act_infer_2arm3cam_direct.py 使用）
+# 支持自动继承:
+# - shared.device / shared.seed
+# - convert.output_root_dir / convert.repo_id
+# - train_act.output.final_dir 或 train_act.deploy_export.dir
+deploy_direct:
+  model:
+    # 留空时自动继承 train_act 输出目录
+    ckpt_dir: ""
+    # 若想直接加载 ckpt_step_xxxxxxx.pt，可填写该项（优先于 ckpt_dir）
+    checkpoint_path: ""
+    strict_load: true
+    # 留空时自动继承 shared.device（或脚本内 fallback=auto）
+    device: ""
+    image_size: 256
+    state_dim: 28
+    action_dim: 14
+    policy:
+      # 留空时自动继承 train_act.policy
+      chunk_size: 100
+      n_action_steps: 1
+      temporal_ensemble_coeff: 0.01
+    dataset:
+      # 留空时自动继承 convert.output_root_dir / convert.repo_id
+      repo_id: ""
+      root: ""
+      seed: ""
+
+  features:
+    image_left: "observation.image_left"
+    image_right: "observation.image_right"
+    image_middle: "observation.image_middle"
+    state: "observation.state"
+    action: "action"
+
+  runtime:
+    infer_mode: "reset_then_live" # reset_then_live | current_then_live
+    control_hz: 30.0
+    image_size: 256
+    log_every: 30
+    wait_ready_timeout_sec: 0.0
+    ready_log_interval_sec: 5.0
+    do_reset: true
+    reset_err_thresh: 0.03
+    reset_timeout_sec: 8.0
+
+  state:
+    num_arms: 2
+    per_arm_dim: 7
+    history_steps: 0
+    history_padding: "repeat"
+    fields:
+      - key: "positions"
+        enabled: true
+        joint_indices: null
+      - key: "velocities"
+        enabled: false
+        joint_indices: null
+      - key: "efforts"
+        enabled: true
+        joint_indices: null
+
+  reset:
+    mode: "dataset" # dataset | home_pose | none
+    dataset:
+      # 留空时自动继承 model.dataset
+      repo_id: ""
+      root: ""
+      selection: "random" # random | fixed | mean_initial
+      fixed_episode: 0
+      seed: ""
+    # home_pose14: [q1_1, q1_2, q1_3, q1_4, q1_5, q1_6, q1_g, q2_1, q2_2, q2_3, q2_4, q2_5, q2_6, q2_g]
+
+  reset_motion:
+    enabled: true
+    max_joint_speed_rad_s: 0.10
+    min_steps: 30
+    settle_hold_sec: 0.3
+
+  camera_selection:
+    enabled_cameras: ["left", "right", "middle"]
+
+  ros_topics:
+    image_left: "/cam_left/color/image_raw"
+    image_right: "/cam_right/color/image_raw"
+    image_middle: "/cam_middle/color/image_raw"
+    slave1_js: "/slave1/joint_states_single"
+    slave2_js: "/slave2/joint_states_single"
+    slave1_cmd: "/slave1/joint_states"
+    slave2_cmd: "/slave2/joint_states"
+
+  control_msg:
+    joint_velocity_default: 0.0
+    joint_effort_default: 0.0
+    gripper_velocity: 100.0
+    gripper_effort: 1.0
+
+  launcher:
+    auto_start_stack: true
+    piper_defaults:
+      auto_enable: true
+      girpper_exist: true
+      gripper_val_mutiple: 1
+      remap_from: "joint_ctrl_single"
+      remap_to: "joint_states"
+    piper_nodes:
+      - namespace: "slave1"
+        can_port: "slave1"
+      - namespace: "slave2"
+        can_port: "slave2"
+    cameras:
+      left:
+        node_name: "realsense_publisher_cam_left_deploy_direct"
+        serial_no: ""
+        video_number: 16
+        v4l_by_id: ""
+        device_name: "D405"
+        backend: "auto"
+        require_color: true
+        startup_timeout_sec: 5.0
+        retry_interval_sec: 1.0
+        status_topic: "/cam_left/status"
+        color_topic: "/cam_left/color/image_raw"
+        depth_topic: "/cam_left/depth/image_raw"
+        enable_depth: false
+        width: 640
+        height: 480
+        fps: 30
+      right:
+        node_name: "realsense_publisher_cam_right_deploy_direct"
+        serial_no: ""
+        video_number: 4
+        v4l_by_id: ""
+        device_name: "D405"
+        backend: "auto"
+        require_color: true
+        startup_timeout_sec: 5.0
+        retry_interval_sec: 1.0
+        status_topic: "/cam_right/status"
+        color_topic: "/cam_right/color/image_raw"
+        depth_topic: "/cam_right/depth/image_raw"
+        enable_depth: false
+        width: 640
+        height: 480
+        fps: 30
+      middle:
+        node_name: "realsense_publisher_cam_middle_deploy_direct"
+        serial_no: ""
+        video_number: 10
+        v4l_by_id: ""
+        device_name: "D435"
+        backend: "auto"
+        require_color: true
+        startup_timeout_sec: 5.0
+        retry_interval_sec: 1.0
+        status_topic: "/cam_middle/status"
+        color_topic: "/cam_middle/color/image_raw"
+        depth_topic: "/cam_middle/depth/image_raw"
+        enable_depth: false
+        width: 640
+        height: 480
+        fps: 30
+
+# ========== server/client（分离部署）==========
+# 说明:
+# - 依然使用同一个 pipeline_config.yaml
+# - deploy_server / deploy_client 会自动复用 deploy_direct 里的公共配置
+# - 你只需要在这里写“差异项”
+
+deploy_server:
+  server:
+    bind: "0.0.0.0"
+    port: 5577
+  infer:
+    mode: "reset_then_live" # reset_then_live | current_then_live
+  model:
+    # 明确指定“可直接加载”的 HF 导出目录（应包含 config.json / model.safetensors）
+    ckpt_dir: "../output_keyboard_gaze"
+    # 显式固定部署期策略参数，避免被 train_act.policy 兜底值覆盖
+    policy:
+      chunk_size: 100
+      n_action_steps: 1
+      temporal_ensemble_coeff: 0.01
+  dataset_preview:
+    image_size: 256
+    jpeg_quality: 80
+  save_client_data:
+    enabled: false
+    save_dir: "./client_data_saved_2arm3cam_deploy"
+
+deploy_client:
+  network:
+    # host 机器 IP；同机可用 172.17.0.1（docker bridge）
+    server_ip: "172.17.0.1"
+    # 留空时自动继承 deploy_server.server.port
+    server_port: ""
+    send_timeout_ms: 1500
+    recv_timeout_ms: 1500
+    linger_ms: 0
+    request_retries: 3
+    retry_sleep_sec: 0.2
+
+  runtime:
+    control_hz: 30.0
+    wait_ready_timeout_sec: 0.0
+    ready_log_interval_sec: 5.0
+    auto_start_infer: false
+    image_size: 256
+    jpeg_quality: 80
+    log_every: 30
+    do_reset: true
+    reset_err_thresh: 0.03
+    reset_timeout_sec: 8.0
+
+  gui:
+    default_infer_mode: "reset_then_live" # reset_then_live | current_then_live
+    replay_hold_sec: 5.0
+    random_replay_fps: 30.0
+    random_replay_policy_reset: false
+    random_replay_do_infer: false
+    button:
+      width: 280
+      height: 54
+      gap: 12
+      left: 20
+      top: 140

@@ -1,0 +1,133 @@
+# pipeline_config.yaml
+# Compatible with lerobot >= 0.4.0 (Dataset v3.0)
+# - convert_to_lerobot.py reads `convert`
+# - train_act.py        reads `train_act`
+
+shared:
+  seed: 42
+  device: "cuda"
+
+# ============================================================
+# 数据转换
+# ============================================================
+convert:
+  input_data_dir: "./test_data"
+  output_root_dir: "./lerobot_test_data"
+  repo_id: "test_data"
+
+  hdf5_layout: "masters_slaves"   # masters_slaves | state_action
+
+  arm_pairs: ["pair1", "pair2"]
+
+  cameras:
+    - name: "left"
+      obs_key: "observation.image_left"
+    - name: "right"
+      obs_key: "observation.image_right"
+    - name: "top"
+      obs_key: "observation.image_top"
+
+  fps: 30
+  robot_type: "piper"
+  task_name: "teleop_task"
+  image_size: [256, 256]          # [W, H]
+  image_resample: "BILINEAR"
+  per_arm_dim: 7
+
+  state:
+    history_steps: 0
+    history_padding: "repeat"
+    fields:
+      - key: "positions"
+        enabled: true
+        joint_indices: null
+      - key: "efforts"
+        enabled: true
+        joint_indices: null
+
+  action:
+    fields:
+      - key: "positions"
+        enabled: true
+        joint_indices: null
+
+  validation:
+    check_nan: true
+    check_length_consistency: true
+    check_timestamp_jumps: true
+    max_timestamp_gap_sec: 0.1
+    skip_bad_episodes: true
+
+  parallel:
+    num_workers: 8
+    chunksize: 1
+
+  # v3.0 多 episode 合并存储，不支持文件级断点续跑，建议全量重转
+  resume_if_possible: false
+
+# ============================================================
+# 训练
+# ============================================================
+train_act:
+  train:
+    steps: 20000
+    lr: 1e-5
+    log_freq: 1000
+    grad_clip_norm: 10.0
+
+  dataloader:
+    batch_size: 8
+    num_workers: 4
+    shuffle: true
+    drop_last: true
+    pin_memory: true
+
+  policy:
+    chunk_size: 50
+    n_action_steps: 50
+
+  transform:
+    gaussian_noise:
+      enable: false
+      mean: 0.0
+      std: 0.02
+    clamp:
+      enable: false
+      min: 0.0
+      max: 1.0
+
+  checkpoint:
+    dir: "./test_checkpoint"
+    save_every_steps: 10000
+    save_on_train_end: true
+    max_to_keep: 5
+    auto_resume: true
+    auto_resume_scan_output: true
+    resume_from: ""
+
+  loss_plot:
+    enable: false
+    dir: "./output_test/loss_trend"
+    filename_prefix: "loss_trend"
+    save_on_checkpoint: true
+    save_on_train_end: true
+    smooth_window: 200
+    log_scale: false
+
+  output:
+    final_dir: "./output_test"
+
+  # 导出 HuggingFace 格式权重（config.json + model.safetensors）
+  # 可直接用于后续推理部署，无需再次转换
+  deploy_export:
+    dir: "./output_test"
+    export_on_checkpoint: true
+    export_on_train_end: true
+    backfill_historical_checkpoints: true
+    checkpoint_subdir: true
+    checkpoint_subdir_prefix: "step"
+    export_train_end_snapshot: false
+    train_end_subdir_prefix: "final_step"
+
+  eval:
+    enable: false

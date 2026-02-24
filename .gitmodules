@@ -1,6 +1,0 @@
-[submodule "lerobot-server"]
-	path = lerobot-server
-	url = https://github.com/jeongeun980906/lerobot-mujoco-tutorial.git
-[submodule "src/piper_ros"]
-	path = src/piper_ros
-	url = https://github.com/agilexrobotics/piper_ros.git

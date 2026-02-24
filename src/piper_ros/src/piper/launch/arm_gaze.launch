@@ -1,0 +1,29 @@
+<launch>
+  <!-- ==== CAN 设备名 ==== -->
+  <arg name="can_port" default="slave3" />
+
+  <!-- ==== ZMQ Host IP (Docker内看Host) ==== -->
+  <arg name="server_ip" default="172.17.0.1" />
+
+  <!-- ==== 配置文件绝对路径 ==== -->
+  <arg name="config_path" default="/home/jinhe/Desktop/piper_master_slave_ws/piper_master_slave_ws/arm_client_config.yaml" />
+
+  <!-- ==== Piper 驱动节点 ==== -->
+  <node name="piper_ctrl_single_node"
+        pkg="piper"
+        type="piper_ctrl_single_node.py"
+        output="screen">
+    <param name="can_port"             value="$(arg can_port)" />
+    <param name="auto_enable"          value="true" />
+    <param name="girpper_exist"        value="true" />
+    <param name="gripper_val_mutiple"  value="1" />
+  </node>
+
+  <!-- ==== Gaze Arm Client 节点 ==== -->
+  <node name="arm_gaze_client"
+        pkg="piper"
+        type="arm_client.py"
+        output="screen">
+    <param name="config_path" value="$(arg config_path)" />
+  </node>
+</launch>

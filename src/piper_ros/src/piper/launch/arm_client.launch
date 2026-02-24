@@ -1,0 +1,15 @@
+<!-- arm_client.launch -->
+<!-- 使用方式: roslaunch <your_package> arm_client.launch -->
+<!-- 或: rosrun 方式启动后手动传参 -->
+<launch>
+    <!-- 配置文件路径, 按实际位置修改 -->
+    <arg name="config_path" default="$(find piper_gaze)/config/arm_client_config.yaml"/>
+
+    <node name="arm_gaze_client"
+          pkg="piper_gaze"
+          type="arm_client.py"
+          output="screen"
+          respawn="false">
+        <param name="config_path" value="$(arg config_path)"/>
+    </node>
+</launch>

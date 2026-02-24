@@ -1,0 +1,107 @@
+<launch>
+  <!-- ==== ZMQ to host ==== -->
+  <arg name="server_ip" default="127.0.0.1" />
+  <arg name="server_port" default="5560" />
+  <arg name="state_dim" default="28" />
+  <arg name="action_dim" default="14" />
+  <arg name="reset_dim" default="14" />
+  <arg name="per_arm_dim" default="7" />
+  <arg name="state_fields" default="positions,efforts" />
+
+  <!-- ==== CAN iface names ==== -->
+  <arg name="slave1_can" default="slave1" />
+  <arg name="slave2_can" default="slave2" />
+
+  <!-- ==== 三相机序列号配置（从你的teleop launch复制） ==== -->
+  <arg name="cam_left_serial"   default="352122273242" />  <!-- D405 左侧 -->
+  <arg name="cam_right_serial"  default="352122273590" />  <!-- D405 右侧 ⭐ 注意不同 -->
+  <arg name="cam_middle_serial" default="348522075799" />  <!-- D435 中间 -->
+
+  <!-- ==== 话题名（匹配训练数据） ==== -->
+  <arg name="image_topic_left"   default="/cam_left/color/image_raw" />
+  <arg name="image_topic_right"  default="/cam_right/color/image_raw" />
+  <arg name="image_topic_middle" default="/cam_middle/color/image_raw" />
+
+  <!-- ==== Piper arm control nodes ==== -->
+  <group ns="slave1">
+    <node name="piper_ctrl_single_node" pkg="piper" type="piper_ctrl_single_node.py" output="screen">
+      <param name="can_port" value="$(arg slave1_can)" />
+      <param name="auto_enable" value="true" />
+      <param name="girpper_exist" value="true" />
+      <param name="gripper_val_mutiple" value="1" />
+      <remap from="joint_ctrl_single" to="joint_states" />
+    </node>
+  </group>
+
+  <group ns="slave2">
+    <node name="piper_ctrl_single_node" pkg="piper" type="piper_ctrl_single_node.py" output="screen">
+      <param name="can_port" value="$(arg slave2_can)" />
+      <param name="auto_enable" value="true" />
+      <param name="girpper_exist" value="true" />
+      <param name="gripper_val_mutiple" value="1" />
+      <remap from="joint_ctrl_single" to="joint_states" />
+    </node>
+  </group>
+
+  <!-- ==== Camera Left: D405 (USB 2.3.1) ==== -->
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_left" output="screen">
+    <param name="serial_no" value="$(arg cam_left_serial)" type="str" />
+    <param name="device_name" value="D405" />
+    <param name="color_topic" value="$(arg image_topic_left)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <!-- ==== Camera Right: D405 (USB 2.3.3) ==== -->
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_right" output="screen">
+    <param name="serial_no" value="$(arg cam_right_serial)" type="str" />
+    <param name="device_name" value="D405" />
+    <param name="color_topic" value="$(arg image_topic_right)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <!-- ==== Camera Middle: D435 (USB 2.4) ==== -->
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_middle" output="screen">
+    <param name="serial_no" value="$(arg cam_middle_serial)" type="str" />
+    <param name="device_name" value="D435" />
+    <param name="color_topic" value="$(arg image_topic_middle)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <!-- ==== ACT client (三相机 state 配置化) ==== -->
+  <node pkg="piper_test" type="act_client_ros_2arm3cam_state14.py" name="act_client_ros" output="screen">
+    <param name="server_ip" value="$(arg server_ip)" />
+    <param name="server_port" value="$(arg server_port)" />
+    <param name="state_dim" value="$(arg state_dim)" />
+    <param name="action_dim" value="$(arg action_dim)" />
+    <param name="reset_dim" value="$(arg reset_dim)" />
+    <param name="per_arm_dim" value="$(arg per_arm_dim)" />
+    <param name="state_fields" value="$(arg state_fields)" />
+
+    <param name="control_hz" value="30.0" />
+    <param name="image_size" value="256" />
+    <param name="jpeg_quality" value="80" />
+    <param name="reset_err_thresh" value="0.03" />
+    <param name="reset_timeout" value="8.0" />
+    <param name="do_reset" value="true" />
+
+    <!-- 三相机话题（匹配训练数据） -->
+    <param name="image_topic1" value="$(arg image_topic_left)" />
+    <param name="image_topic2" value="$(arg image_topic_right)" />
+    <param name="image_topic3" value="$(arg image_topic_middle)" />
+
+    <!-- Slave 话题 -->
+    <param name="slave1_js_topic" value="/slave1/joint_states_single" />
+    <param name="slave2_js_topic" value="/slave2/joint_states_single" />
+    <param name="slave1_cmd_topic" value="/slave1/joint_states" />
+    <param name="slave2_cmd_topic" value="/slave2/joint_states" />
+  </node>
+</launch>
