@@ -41,6 +41,38 @@ catkin_make --pkg piper_test
 source devel/setup.bash
 ```
 
+Dependency snapshots saved in this repo:
+
+- `env/conda_lerobot-mujoco.yml`
+- `env/conda_lerobot-mujoco_explicit.txt`
+- `env/conda_lerobot-mujoco_pip_freeze.txt`
+- `env/ros_noetic_apt_packages.txt`
+- `env/ros_system_python_pip_freeze.txt`
+
+Install before running (recommended baseline):
+
+```bash
+cd /workspace/piper_master_slave_ws
+
+# 1) Conda env for training/inference
+conda env create -f env/conda_lerobot-mujoco.yml || true
+conda env update -n lerobot-mujoco -f env/conda_lerobot-mujoco.yml
+
+# 2) ROS packages snapshot (requires sudo)
+sudo apt-get update
+xargs -a env/ros_noetic_apt_packages.txt sudo apt-get install -y
+
+# 3) System python packages used with ROS (optional, depends on your host image)
+/usr/bin/python3 -m pip install -r env/ros_system_python_pip_freeze.txt
+```
+
+Refresh snapshots later:
+
+```bash
+cd /workspace/piper_master_slave_ws
+bash env/export_env_snapshots.sh lerobot-mujoco
+```
+
 ### 3. Teleop Recording (bag)
 
 Launch:
@@ -302,6 +334,38 @@ cd /workspace/piper_master_slave_ws
 source /opt/ros/noetic/setup.bash
 catkin_make --pkg piper_test
 source devel/setup.bash
+```
+
+仓库里已保存的依赖快照：
+
+- `env/conda_lerobot-mujoco.yml`
+- `env/conda_lerobot-mujoco_explicit.txt`
+- `env/conda_lerobot-mujoco_pip_freeze.txt`
+- `env/ros_noetic_apt_packages.txt`
+- `env/ros_system_python_pip_freeze.txt`
+
+运行前建议安装（基线）：
+
+```bash
+cd /workspace/piper_master_slave_ws
+
+# 1) 训练/推理 conda 环境
+conda env create -f env/conda_lerobot-mujoco.yml || true
+conda env update -n lerobot-mujoco -f env/conda_lerobot-mujoco.yml
+
+# 2) ROS apt 依赖快照（需要 sudo）
+sudo apt-get update
+xargs -a env/ros_noetic_apt_packages.txt sudo apt-get install -y
+
+# 3) ROS 使用的系统 python 包（可选，按你的主机镜像决定）
+/usr/bin/python3 -m pip install -r env/ros_system_python_pip_freeze.txt
+```
+
+后续刷新依赖快照：
+
+```bash
+cd /workspace/piper_master_slave_ws
+bash env/export_env_snapshots.sh lerobot-mujoco
 ```
 
 ### 3. Teleop 录制（bag）
