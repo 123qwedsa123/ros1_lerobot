@@ -1,35 +1,38 @@
 # Piper Master-Slave Workspace (ROS1 + LeRobot)
 
-English and Chinese documentation are both included in this file.
+This README includes both English and Chinese documentation.
 
 ## English
 
-### Overview
+### 1. Scope
 
-This repository contains a ROS1 workspace for Piper dual-arm workflows:
+This repo is a ROS1 workspace for Piper dual-arm workflows:
 
-- Bimanual teleoperation with force feedback
-- Rosbag recording and replay
-- 2-arm 3-camera ACT policy inference
-- Bag-to-LeRobot dataset conversion and training helpers
+- teleop + force feedback data collection
+- rosbag replay
+- bag -> LeRobot dataset conversion
+- ACT training helpers
+- ACT online deployment (2 arms + 3 cameras)
 
-### Repository Layout
+Main folders:
 
-- `src/piper_ros`: Piper ROS drivers, messages, and hardware interfaces
-- `src/piper_test`: launch/config/scripts for teleop, recording, replay, and inference
-- `src/piper_moveit`: MoveIt configurations and related motion planning code
-- `lerobot-server`: dataset conversion and training utility scripts
-- `data`: recorded episodes and runtime outputs
+- `src/piper_ros`: low-level Piper ROS drivers / interfaces
+- `src/piper_test`: launch/config/scripts for teleop, replay, and inference
+- `src/piper_moveit`: MoveIt related packages/configs
+- `lerobot-server`: conversion + training scripts
+- `data`: local recording outputs
 
-### Environment
+### 2. Environment and Build
 
-- Ubuntu 20.04 + ROS Noetic
-- Python 3 with ROS Python dependencies
-- CAN interfaces configured for your master/slave arms
-- Intel RealSense cameras for camera-based workflows
-- Optional conda env (for LeRobot/ACT), e.g. `lerobot-mujoco`
+Recommended base:
 
-### Build
+- Ubuntu 20.04
+- ROS Noetic
+- Python 3
+- Intel RealSense for camera pipelines
+- Conda env for LeRobot training/inference (for example `lerobot-mujoco`)
+
+Build:
 
 ```bash
 cd /workspace/piper_master_slave_ws
@@ -38,92 +41,216 @@ catkin_make --pkg piper_test
 source devel/setup.bash
 ```
 
-### Common Workflows
+### 3. Teleop Recording (bag)
 
-1. Teleop + rosbag recording:
+Launch:
 
 ```bash
 roslaunch piper_test teleop_raw_record_piperros_ff.launch
 ```
 
-Config file: `src/piper_test/config/teleop_raw_record_piperros_ff.yaml`
+With custom config:
 
-2. Replay recorded episodes:
+```bash
+roslaunch piper_test teleop_raw_record_piperros_ff.launch \
+  config:=$(rospack find piper_test)/config/teleop_raw_record_piperros_ff.yaml
+```
+
+Config file:
+
+- `src/piper_test/config/teleop_raw_record_piperros_ff.yaml`
+
+Default recording topics come from:
+
+- each arm pair:
+  - `/{master}/joint_states_single`
+  - `/{slave}/joint_states_single`
+- each camera:
+  - if `rosbag.camera_transport: compressed` -> `/realsense_{name}/color/image_raw/compressed`
+  - else -> `/realsense_{name}/color/image_raw`
+  - depth topic is included only when camera depth is enabled and save_depth is true
+
+Keyboard controls in current recorder:
+
+- `SPACE`: start/stop recording (stop = save episode)
+- `Q`: quit (if recording, current episode is stopped first)
+
+Output layout:
+
+- `data/<session_name>/episode_XXX/episode.bag`
+- `data/<session_name>/episode_XXX/metadata.json`
+- `data/<session_name>/episode_XXX/rosbag_record.log`
+
+Important knobs in config:
+
+- `rosbag.session_prefix` / `rosbag.session_name`
+- `rosbag.lz4`
+- `rosbag.camera_transport`
+- `arm_pairs` (master/slave namespaces and CAN names)
+- `cameras` (serial, resolution, fps)
+
+### 4. Replay
+
+Launch:
 
 ```bash
 roslaunch piper_test teleop_raw_replay.launch
 ```
 
-Config file: `src/piper_test/config/teleop_raw_replay.yaml`
+Config:
 
-3. ACT direct inference (2 arms + 3 cameras):
+- `src/piper_test/config/teleop_raw_replay.yaml`
 
-```bash
-roslaunch piper_test act_infer_2arm3cam_direct.launch
-```
+Most useful replay fields:
 
-Before running, check paths in:
+- `replay.episode_file`
+- `replay.session_name`
+- `replay.episode_id` (`-1` means latest)
+- `replay.speed_scale`
+- `safety_reset.*` (pre-replay slow reset policy)
 
-- `src/piper_test/launch/act_infer_2arm3cam_direct.launch`
-- `src/piper_test/config/act_infer_2arm3cam_direct.yaml`
+### 5. Convert bag to LeRobot
 
-4. Convert bag data to LeRobot format:
+Scripts:
+
+- `lerobot-server/bag_to_lerobot.py`
+- config: `lerobot-server/config/bag_convert_config.yaml`
+
+Phase 1 (ROS environment, bag -> v2.1):
 
 ```bash
 cd /workspace/piper_master_slave_ws/lerobot-server
-bash convert.sh --config config/bag_convert_config.yaml
+source /opt/ros/noetic/setup.bash
+python3 bag_to_lerobot.py --config config/bag_convert_config.yaml --phase 1
 ```
 
-5. Run ACT training:
+Phase 2 (LeRobot environment, v2.1 -> v3.0):
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+conda activate lerobot-mujoco
+python bag_to_lerobot.py --config config/bag_convert_config.yaml --phase 2
+```
+
+Notes:
+
+- `convert.session_dir` in `bag_convert_config.yaml` must point to your `episode_*/episode.bag` folder.
+- `convert.clean_output: true` will clear old dataset output before conversion.
+- Output is generated under `convert.output_root/convert.dataset_id`.
+
+### 6. Training (ACT)
+
+Script:
+
+- `lerobot-server/run_train.py`
+- config: `lerobot-server/config/train_config.yaml`
+
+Dry run (recommended first):
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+python run_train.py --config config/train_config.yaml --dry-run
+```
+
+Run training:
 
 ```bash
 cd /workspace/piper_master_slave_ws/lerobot-server
 python run_train.py --config config/train_config.yaml
 ```
 
-### Data Layout
+Key config sections:
 
-Recorded episodes follow:
+- `runtime.command`: training executable path (recommended absolute path)
+- `runtime.env`: env overrides (for example `CUDA_VISIBLE_DEVICES`)
+- `variables`: reusable template variables
+- `train_args`: nested args auto-expanded to CLI flags
+- `flags` / `raw_args`: extra direct CLI options
 
-`data/<session_name>/episode_XXX/episode.bag`  
-`data/<session_name>/episode_XXX/metadata.json`
+Resume training:
 
-### Git Notes
+- set `train_args.resume: true`
+- set `train_args.config_path` to a checkpoint `train_config.json`
 
-Large generated files are intentionally ignored in `.gitignore`, including model/data outputs such as:
+### 7. Deploy (Online Inference)
 
-- `*.pt`, `*.pth`, `*.ckpt`, `*.safetensors`
+Primary deploy path in this repo:
+
+- launch: `src/piper_test/launch/act_infer_2arm3cam_direct.launch`
+- node: `src/piper_test/scripts/act_infer_2arm3cam_direct.py`
+- config: `src/piper_test/config/act_infer_2arm3cam_direct.yaml`
+
+Run:
+
+```bash
+roslaunch piper_test act_infer_2arm3cam_direct.launch
+```
+
+Typical override when moving to another machine:
+
+```bash
+roslaunch piper_test act_infer_2arm3cam_direct.launch \
+  conda_python:=/path/to/conda/env/bin/python \
+  conda_site_packages:=/path/to/conda/env/lib/python3.10/site-packages \
+  infer_config:=$(rospack find piper_test)/config/act_infer_2arm3cam_direct.yaml
+```
+
+Deploy checklist:
+
+- update CAN names (`slave1_can`, `slave2_can`) in launch args
+- update RealSense serial numbers in launch args
+- set `model.checkpoint_dir` in inference config
+- verify topics:
+  - states: `/slave1/joint_states_single`, `/slave2/joint_states_single`
+  - images: `/cam_left/color/image_raw`, `/cam_right/color/image_raw`, `/cam_top/color/image_raw`
+  - command outputs defined by config topics (`left_cmd`, `right_cmd`)
+
+Checkpoint expectation:
+
+- inference checkpoint directory should contain at least:
+  - `config.json`
+  - `model.safetensors`
+
+### 8. Git / Large Files
+
+Large generated artifacts should stay ignored (already in `.gitignore`), e.g.:
+
+- `*.pt`, `*.pth`, `*.ckpt`, `*.safetensors`, `*.onnx`
 - `lerobot-server/act_data/`
 - `lerobot-server/output/`
+- rosbag / datasets / runtime outputs
 
 ## 中文
 
-### 项目简介
+### 1. 项目范围
 
-这个仓库是一个基于 ROS1 的 Piper 双臂工作空间，主要包含：
+这个仓库是 Piper 双臂在 ROS1 下的工作空间，覆盖：
 
-- 双臂主从遥操作（含力反馈）
-- rosbag 录制与回放
-- 双臂三相机 ACT 推理
-- bag 到 LeRobot 数据集转换与训练辅助脚本
+- 遥操作 + 力反馈数据采集
+- rosbag 回放
+- bag -> LeRobot 数据集转换
+- ACT 训练辅助
+- ACT 在线部署（双臂三相机）
 
-### 目录说明
+核心目录：
 
-- `src/piper_ros`：Piper ROS 驱动、消息定义和硬件接口
-- `src/piper_test`：遥操作/录制/回放/推理相关 launch、config、scripts
-- `src/piper_moveit`：MoveIt 配置和运动规划相关代码
-- `lerobot-server`：数据集转换与训练工具脚本
-- `data`：录制数据与运行时输出
+- `src/piper_ros`：Piper 底层驱动与接口
+- `src/piper_test`：teleop / replay / infer 的 launch、config、脚本
+- `src/piper_moveit`：MoveIt 相关包
+- `lerobot-server`：转换与训练脚本
+- `data`：本地录制数据
 
-### 环境要求
+### 2. 环境与编译
 
-- Ubuntu 20.04 + ROS Noetic
-- Python 3 与 ROS Python 依赖
-- 已正确配置主从机械臂对应的 CAN 口
-- 需要相机流程时，准备 Intel RealSense
-- 如需 LeRobot/ACT，建议使用 conda 环境（例如 `lerobot-mujoco`）
+推荐环境：
 
-### 编译
+- Ubuntu 20.04
+- ROS Noetic
+- Python 3
+- 相机流程使用 Intel RealSense
+- LeRobot 训练/推理建议使用 conda（例如 `lerobot-mujoco`）
+
+编译：
 
 ```bash
 cd /workspace/piper_master_slave_ws
@@ -132,60 +259,181 @@ catkin_make --pkg piper_test
 source devel/setup.bash
 ```
 
-### 常用流程
+### 3. Teleop 录制（bag）
 
-1. 遥操作 + rosbag 录制：
+启动：
 
 ```bash
 roslaunch piper_test teleop_raw_record_piperros_ff.launch
 ```
 
-配置文件：`src/piper_test/config/teleop_raw_record_piperros_ff.yaml`
+指定配置：
 
-2. 回放录制数据：
+```bash
+roslaunch piper_test teleop_raw_record_piperros_ff.launch \
+  config:=$(rospack find piper_test)/config/teleop_raw_record_piperros_ff.yaml
+```
+
+配置文件：
+
+- `src/piper_test/config/teleop_raw_record_piperros_ff.yaml`
+
+默认会录制的话题来源：
+
+- 每个 arm pair：
+  - `/{master}/joint_states_single`
+  - `/{slave}/joint_states_single`
+- 每个相机：
+  - 若 `rosbag.camera_transport: compressed` -> `/realsense_{name}/color/image_raw/compressed`
+  - 否则 -> `/realsense_{name}/color/image_raw`
+  - depth 只有在相机开启 depth 且 save_depth=true 时才录
+
+当前 recorder 键盘逻辑：
+
+- `SPACE`：开始/停止录制（停止即保存）
+- `Q`：退出（若在录制会先停止当前段）
+
+输出目录结构：
+
+- `data/<session_name>/episode_XXX/episode.bag`
+- `data/<session_name>/episode_XXX/metadata.json`
+- `data/<session_name>/episode_XXX/rosbag_record.log`
+
+常改配置项：
+
+- `rosbag.session_prefix` / `rosbag.session_name`
+- `rosbag.lz4`
+- `rosbag.camera_transport`
+- `arm_pairs`（命名空间与 CAN）
+- `cameras`（序列号、分辨率、帧率）
+
+### 4. 回放
+
+启动：
 
 ```bash
 roslaunch piper_test teleop_raw_replay.launch
 ```
 
-配置文件：`src/piper_test/config/teleop_raw_replay.yaml`
+配置文件：
 
-3. ACT 直连推理（双臂三相机）：
+- `src/piper_test/config/teleop_raw_replay.yaml`
 
-```bash
-roslaunch piper_test act_infer_2arm3cam_direct.launch
-```
+关键参数：
 
-运行前请先检查：
+- `replay.episode_file`
+- `replay.session_name`
+- `replay.episode_id`（`-1` 表示最新）
+- `replay.speed_scale`
+- `safety_reset.*`（回放前慢速复位策略）
 
-- `src/piper_test/launch/act_infer_2arm3cam_direct.launch`
-- `src/piper_test/config/act_infer_2arm3cam_direct.yaml`
+### 5. bag 转 LeRobot
 
-4. 将 bag 转换为 LeRobot 数据集：
+脚本：
+
+- `lerobot-server/bag_to_lerobot.py`
+- 配置：`lerobot-server/config/bag_convert_config.yaml`
+
+Phase 1（ROS 环境，bag -> v2.1）：
 
 ```bash
 cd /workspace/piper_master_slave_ws/lerobot-server
-bash convert.sh --config config/bag_convert_config.yaml
+source /opt/ros/noetic/setup.bash
+python3 bag_to_lerobot.py --config config/bag_convert_config.yaml --phase 1
 ```
 
-5. 启动 ACT 训练：
+Phase 2（LeRobot 环境，v2.1 -> v3.0）：
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+conda activate lerobot-mujoco
+python bag_to_lerobot.py --config config/bag_convert_config.yaml --phase 2
+```
+
+说明：
+
+- `bag_convert_config.yaml` 里的 `convert.session_dir` 必须指向包含 `episode_*/episode.bag` 的目录。
+- `convert.clean_output: true` 会先清理旧输出再转换。
+- 输出目录为 `convert.output_root/convert.dataset_id`。
+
+### 6. 训练（ACT）
+
+脚本：
+
+- `lerobot-server/run_train.py`
+- 配置：`lerobot-server/config/train_config.yaml`
+
+建议先 dry-run：
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+python run_train.py --config config/train_config.yaml --dry-run
+```
+
+正式训练：
 
 ```bash
 cd /workspace/piper_master_slave_ws/lerobot-server
 python run_train.py --config config/train_config.yaml
 ```
 
-### 数据目录结构
+关键配置块：
 
-录制输出目录结构如下：
+- `runtime.command`：训练可执行命令（建议绝对路径）
+- `runtime.env`：环境变量（如 `CUDA_VISIBLE_DEVICES`）
+- `variables`：模板变量
+- `train_args`：嵌套参数会自动展开为 CLI 参数
+- `flags` / `raw_args`：附加参数
 
-`data/<session_name>/episode_XXX/episode.bag`  
-`data/<session_name>/episode_XXX/metadata.json`
+断点续训：
 
-### Git 说明
+- 设置 `train_args.resume: true`
+- 设置 `train_args.config_path` 指向 checkpoint 的 `train_config.json`
 
-仓库默认会忽略大体积生成文件（权重/数据产物），包括：
+### 7. 部署（在线推理）
 
-- `*.pt`, `*.pth`, `*.ckpt`, `*.safetensors`
+当前主路径：
+
+- launch：`src/piper_test/launch/act_infer_2arm3cam_direct.launch`
+- 节点：`src/piper_test/scripts/act_infer_2arm3cam_direct.py`
+- 配置：`src/piper_test/config/act_infer_2arm3cam_direct.yaml`
+
+运行：
+
+```bash
+roslaunch piper_test act_infer_2arm3cam_direct.launch
+```
+
+跨机器常用覆盖参数：
+
+```bash
+roslaunch piper_test act_infer_2arm3cam_direct.launch \
+  conda_python:=/path/to/conda/env/bin/python \
+  conda_site_packages:=/path/to/conda/env/lib/python3.10/site-packages \
+  infer_config:=$(rospack find piper_test)/config/act_infer_2arm3cam_direct.yaml
+```
+
+部署检查项：
+
+- launch 里更新 CAN（`slave1_can`、`slave2_can`）
+- launch 里更新相机序列号
+- infer config 里设置 `model.checkpoint_dir`
+- 确认话题：
+  - 状态：`/slave1/joint_states_single`、`/slave2/joint_states_single`
+  - 图像：`/cam_left/color/image_raw`、`/cam_right/color/image_raw`、`/cam_top/color/image_raw`
+  - 输出命令话题由 infer config 的 `left_cmd`、`right_cmd` 指定
+
+checkpoint 最低要求：
+
+- 目录里至少有：
+  - `config.json`
+  - `model.safetensors`
+
+### 8. Git 与大文件
+
+大体积生成文件建议保持忽略（`.gitignore` 已包含），例如：
+
+- `*.pt`, `*.pth`, `*.ckpt`, `*.safetensors`, `*.onnx`
 - `lerobot-server/act_data/`
 - `lerobot-server/output/`
+- bag / 数据集 / 运行时输出
