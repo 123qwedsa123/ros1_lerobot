@@ -75,6 +75,31 @@ Keyboard controls in current recorder:
 - `SPACE`: start/stop recording (stop = save episode)
 - `Q`: quit (if recording, current episode is stopped first)
 
+Flexible recorder variant (generalized topic config + save/discard flow):
+
+```bash
+roslaunch piper_test teleop_raw_record_piperros_ff_flexible.launch
+```
+
+Flexible config:
+
+- `src/piper_test/config/teleop_raw_record_piperros_ff_flexible.yaml`
+
+Flexible key bindings:
+
+- `SPACE`: start recording; if currently recording, stop and discard
+- `S`: stop and save
+- `D`: stop and discard
+- `Q`: quit; if currently recording, discard current episode
+
+Flexible topic controls (`rosbag` section in flexible yaml):
+
+- `topic_mode`: `default` / `custom` / `default_plus_custom` / `all` / `all_plus_custom`
+- `record_topics`: explicit topic list with template variables
+- `additional_topics`: always appended topics
+- `include_topic_regex`: include filter
+- `exclude_topic_regex`: exclude filter
+
 Output layout:
 
 - `data/<session_name>/episode_XXX/episode.bag`
@@ -137,6 +162,26 @@ Notes:
 - `convert.session_dir` in `bag_convert_config.yaml` must point to your `episode_*/episode.bag` folder.
 - `convert.clean_output: true` will clear old dataset output before conversion.
 - Output is generated under `convert.output_root/convert.dataset_id`.
+
+Streaming producer-consumer converter (convert while teleop is still recording):
+
+- `lerobot-server/convert_stream.py`
+- `lerobot-server/convert_stream.sh`
+
+Run in another terminal while teleop recorder is active:
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+bash convert_stream.sh --config config/bag_convert_config.yaml
+```
+
+Useful flags:
+
+- `--poll-sec 1.0`: faster directory polling
+- `--settle-sec 2.0`: wait time before a bag is treated as closed
+- `--once`: convert ready episodes once and exit
+- `--idle-exit-sec 120`: exit after idle timeout
+- `--phase2-on-exit`: run v2.1 -> v3.0 once on watcher exit (if enabled in config)
 
 ### 6. Training (ACT)
 
@@ -293,6 +338,31 @@ roslaunch piper_test teleop_raw_record_piperros_ff.launch \
 - `SPACE`：开始/停止录制（停止即保存）
 - `Q`：退出（若在录制会先停止当前段）
 
+增强版 recorder（可泛化话题配置 + 保存/丢弃流程）：
+
+```bash
+roslaunch piper_test teleop_raw_record_piperros_ff_flexible.launch
+```
+
+增强版配置：
+
+- `src/piper_test/config/teleop_raw_record_piperros_ff_flexible.yaml`
+
+增强版按键：
+
+- `SPACE`：开始录制；若正在录制则停止并丢弃
+- `S`：停止并保存
+- `D`：停止并丢弃
+- `Q`：退出；若正在录制会丢弃当前段
+
+增强版话题控制（配置文件 `rosbag` 段）：
+
+- `topic_mode`：`default` / `custom` / `default_plus_custom` / `all` / `all_plus_custom`
+- `record_topics`：显式录制话题列表（支持模板变量）
+- `additional_topics`：总是附加的话题
+- `include_topic_regex`：包含过滤
+- `exclude_topic_regex`：排除过滤
+
 输出目录结构：
 
 - `data/<session_name>/episode_XXX/episode.bag`
@@ -355,6 +425,26 @@ python bag_to_lerobot.py --config config/bag_convert_config.yaml --phase 2
 - `bag_convert_config.yaml` 里的 `convert.session_dir` 必须指向包含 `episode_*/episode.bag` 的目录。
 - `convert.clean_output: true` 会先清理旧输出再转换。
 - 输出目录为 `convert.output_root/convert.dataset_id`。
+
+边录边转（生产者-消费者）脚本：
+
+- `lerobot-server/convert_stream.py`
+- `lerobot-server/convert_stream.sh`
+
+在录制终端之外另开一个终端运行：
+
+```bash
+cd /workspace/piper_master_slave_ws/lerobot-server
+bash convert_stream.sh --config config/bag_convert_config.yaml
+```
+
+常用参数：
+
+- `--poll-sec 1.0`：更快轮询
+- `--settle-sec 2.0`：bag 关闭稳定等待时间
+- `--once`：只转换当前就绪 episode 后退出
+- `--idle-exit-sec 120`：空闲超时退出
+- `--phase2-on-exit`：watcher 退出时执行一次 v2.1 -> v3.0（需配置允许）
 
 ### 6. 训练（ACT）
 

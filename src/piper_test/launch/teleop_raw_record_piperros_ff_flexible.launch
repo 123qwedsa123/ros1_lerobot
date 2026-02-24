@@ -1,0 +1,25 @@
+<launch>
+  <!--
+    Flexible Teleop + Camera + Rosbag recorder (PiperROS force-feedback backend)
+
+    New key bindings:
+      SPACE : start recording (or discard if already recording)
+      S     : stop and save
+      D     : stop and discard
+      Q     : quit (discard current if recording)
+
+    Usage:
+      roslaunch piper_test teleop_raw_record_piperros_ff_flexible.launch
+      roslaunch piper_test teleop_raw_record_piperros_ff_flexible.launch \
+        config:=/path/to/teleop_raw_record_piperros_ff_flexible.yaml
+  -->
+  <arg name="config" default="$(find piper_test)/config/teleop_raw_record_piperros_ff_flexible.yaml" />
+
+  <node pkg="piper_test"
+        type="teleop_raw_system_piperros_ff_flexible.py"
+        name="teleop_raw_system_piperros_ff_flexible"
+        output="screen"
+        required="true">
+    <param name="config_file" value="$(arg config)" />
+  </node>
+</launch>

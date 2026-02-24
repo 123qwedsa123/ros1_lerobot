@@ -1,0 +1,258 @@
+# teleop_raw_record_piperros_ff.yaml
+# 保存格式：rosbag（对齐 cheese-zj/catkin_ws 格式）
+schema_version: 1
+
+global:
+  data_dir: "/workspace/piper_master_slave_ws/data"
+  rate_hz: 30
+
+  save:
+    save_queue_size: 2
+    wait_saves_on_exit: true
+
+  debug:
+    effort_print: true
+    effort_print_hz: 1.0
+
+# =========================
+# Rosbag 录制配置（对齐 cheese-zj）
+# 目录结构：data_dir/session_name/episode_001/episode.bag + metadata.json
+# =========================
+rosbag:
+  lz4: true                    # 对应 cheese-zj 的 --lz4 参数
+  camera_transport: "compressed"      # raw | compressed（对应 cheese-zj 的 camera_transport）
+  session_prefix: "act"        # session 目录名前缀（不填 session_name 时自动生成）
+  session_name: ""             # 填了则使用固定 session 名，不填则自动生成 act_YYYYMMDD_HHMMSS
+
+  # ===== Flexible 录制话题配置 =====
+  # topic_mode:
+  #   default             -> 旧行为（master/slave joint + camera topic）
+  #   custom              -> 只录制 record_topics
+  #   default_plus_custom -> 默认话题 + record_topics
+  #   all                 -> rostopic list 全量录制（谨慎使用，数据很大）
+  #   all_plus_custom     -> 全量 + record_topics
+  topic_mode: "default_plus_custom"
+
+  # 自定义话题（支持模板）
+  # arm 模板变量: {master} {slave} {pair} {master_can} {slave_can}
+  # cam 模板变量: {camera} {name} {device_name} {serial_no}
+  record_topics:
+    - "/{master}/joint_ctrl_single"
+    - "/{slave}/joint_ctrl_single"
+    # - "/tf"
+    # - "/tf_static"
+    # - "/rosout"
+
+  # 无论哪种 mode 都会附加这些话题
+  additional_topics: []
+
+  # 正则过滤（可选）
+  # include 留空 = 不限制；exclude 命中即剔除
+  include_topic_regex: []
+  exclude_topic_regex:
+    - "^/rosout$"
+    - "^/rosout_agg$"
+
+  # 丢弃 episode 时删除目录的重试参数
+  discard_delete_retries: 5
+  discard_delete_wait_sec: 0.20
+
+# =========================
+# Topic 规则
+# =========================
+topics:
+  master_joint_states_tpl: "/{master}/joint_states_single"
+  slave_joint_states_tpl:  "/{slave}/joint_states_single"
+  slave_joint_states_compensated_tpl: "/{slave}/joint_states_compensated"
+  slave_joint_ctrl_tpl:    "/{slave}/joint_ctrl_single"
+  master_joint_ctrl_tpl:   "/{master}/joint_ctrl_single"
+
+# =========================
+# 力反馈
+# =========================
+force_feedback:
+  enabled: true
+  backend: "piperros_node"
+
+  node:
+    auto_enable: true
+    gripper_exist: true
+    gripper_val_multiple: 1.0
+    enable_gripper: true
+    enable_gripper_haptic: true
+    gripper_range: 0.08
+    gripper_reverse: false
+
+    ctrl_mode: "mit"
+    p_speed: 30
+    mit_speed: 50
+    mit_kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    mit_kd: [0.02, 0.03, 0.01, 0.02, 0.02, 0.02]
+    mit_enable_pos: true
+    mit_enable_vel: false
+    mit_enable_tor: true
+    mit_enable_gravity: true
+    mit_gravity_mix_mode: "additive"
+    mit_torque_scale: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_scale_left: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_scale_right: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_feedback_sign: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_torque_feedback_sign_left: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_torque_feedback_sign_right: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_max_torque_abs: 8.0
+    enforce_joint_limits: false
+
+    gripper_haptic_effort_sign: -1.0
+    gripper_haptic_effort_deadband: 0.12
+    gripper_haptic_effort_bias: 0.03
+    gripper_haptic_effort_max: 0.60
+    gripper_haptic_cmd_max: 500
+    gripper_haptic_cmd_enable_threshold: 80
+    gripper_haptic_effort_alpha: 0.25
+    gripper_haptic_release_when_opening: true
+    gripper_haptic_opening_relief: 0.00
+    gripper_haptic_opening_sign: 1.0
+    gripper_haptic_opening_direction_eps: 0.00010
+
+    publish_rate: 100.0
+    control_rate: 50.0
+    subscribe_rate: 50.0
+    filter_enable: true
+    filter_alpha_position: 0.7
+    filter_alpha_velocity: 0.5
+    filter_alpha_effort: 0.5
+
+    master_slave_enable: true
+    master_slave_flag_topic: "/conrft_robot/slave_follow_flag"
+    master_slave_kp_follow: [7.0, 7.0, 7.0, 7.0, 7.0, 7.0]
+    shutdown_mode: "hold"
+
+  gravity_compensation:
+    enabled: true
+    urdf_package: "piper_test"
+    urdf_relpath: "config/piper_x_description.urdf"
+    gravity_joint_scale_left: [1.0, 0.96, 0.97, 0.95, 1.0, 1.0]
+    gravity_joint_scale_right: [1.0, 0.96, 0.97, 0.95, 1.0, 1.0]
+    gravity_joint_sign_left: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_sign_right: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_position_scale_left: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_position_scale_right: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_offset_left: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    gravity_joint_offset_right: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    clip_to_limits: true
+    unwrap_joint_positions: true
+    max_joint_step: 0.08
+    max_torque_delta_warn: 2.0
+
+  # legacy_sdk 参数（仅当 backend=legacy_sdk 生效）
+  pos_diff_threshold: 0.02
+  joint_gain: 10.0
+  joint_ema_alpha: 0.4
+  mit_kp_free: 0.0
+  mit_kp_blocked: 80.0
+  mit_kd: 1.0
+  gripper_contact_threshold: 0.05
+  gripper_gain: 1.0
+  gripper_base_effort: 0.5
+  gripper_min_effort: 0.5
+  gripper_max_effort: 2.0
+  gripper_ema_alpha: 0.2
+  csv_log: true
+  csv_path: "/tmp/force_feedback_log.csv"
+  csv_flush_hz: 5.0
+
+piper_ctrl_defaults:
+  auto_enable: true
+  gripper_exist: true
+  gripper_val_multiple: 1
+
+robot_description:
+  enabled: true
+  package: "piper_test"
+  relpath: "config/piper_x_description.urdf"
+  param: "/robot_description"
+
+arm_pairs:
+  - name: "pair1"
+    master: "teleop/arm_left"
+    slave:  "robot/arm_left"
+    master_can: "master1"
+    slave_can:  "slave1"
+
+  - name: "pair2"
+    master: "teleop/arm_right"
+    slave:  "robot/arm_right"
+    master_can: "master2"
+    slave_can:  "slave2"
+
+# =========================
+# 录制参数（保留供 dim 和 ctrl_cmd 使用）
+# =========================
+recording:
+  per_arm_dim: 7
+
+  master:
+    save_positions: true
+    save_velocities: false
+    save_efforts:   false
+    save_stamp:     true
+
+  slave:
+    save_positions: true
+    save_velocities: true
+    save_efforts:   true
+    save_stamp:     true
+
+ctrl_cmd:
+  joint_velocity_default: 0.0
+  joint_effort_default:   0.0
+  gripper_velocity: 100.0
+  gripper_effort:   1.0
+
+camera_topics:
+  color_tpl: "/realsense_{name}/color/image_raw"
+  depth_tpl: "/realsense_{name}/depth/image_raw"
+
+cameras:
+  - name: "left"
+    device_name: "D405"
+    serial_no: "352122273242"
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true
+
+  - name: "right"
+    device_name: "D405"
+    serial_no: "352122273590"
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true
+
+  - name: "top"
+    device_name: "D435"
+    serial_no: "348522075799"
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true
+
+sync:
+  mode: "latest"
+  max_dt_sec: 0.05
