@@ -1,0 +1,30 @@
+# ============================================================
+# Hand-Eye Calibration - 所有超参数
+# ============================================================
+
+# --- 机械臂 ---
+can_port: "slave1"
+auto_enable: false
+
+# --- 相机 (D405, 直接用pyrealsense2, 不走ROS) ---
+camera_serial: "352122273242"   # ⚠️ 填入D405序列号, 如 "123622270732", 空字符串则自动选第一个
+camera_width: 640
+camera_height: 480
+camera_fps: 30
+
+# --- 末端位姿 (ROS topic) ---
+end_pose_topic: "/end_pose"
+end_pose_type: "PoseStamped"
+
+# --- AprilTag ---
+tag_family: "tag36h11"
+tag_size: 0.06
+tag_ids: [2, 0, 3, 1] 
+board_origin_tag_id: 0
+tag_spacing_x: 0.13
+tag_spacing_y: 0.07
+
+# --- 标定 ---
+num_poses: 15
+method: "TSAI"
+output_file: "calibration_result.yaml"

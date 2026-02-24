@@ -1,0 +1,92 @@
+# teleop_raw_replay.yaml
+# 目标：重播 teleop_raw_record 生成的 episode_*.hdf5
+# 关键安全策略：默认启用回放前慢速复位，复位失败直接中止
+
+schema_version: 1
+
+global:
+  data_dir: "/workspace/piper_master_slave_ws/data"
+  ctrl_startup_wait_sec: 2.0
+  ctrl_ready_timeout_sec: 8.0
+  min_dt_sec: 0.001
+  max_dt_sec: 0.2
+
+replay:
+  # 非空时优先使用该文件（支持绝对路径；相对路径按 data_dir 解析）
+  # 启用 GUI episode selector 时此项会被覆盖
+  episode_file: ""
+  # -1: 最新 episode；>=0: episode_<id>.hdf5
+  episode_id: -1
+  # >1.0 更快，<1.0 更慢
+  speed_scale: 1.0
+  loop: false
+  hold_last_sec: 1.0
+  hold_hz: 10.0
+
+safety_reset:
+  enabled: true
+  # 慢速复位最大关节速度上限（rad/s）
+  max_joint_speed_rad_s: 0.10
+  min_steps: 30
+  reset_rate_hz: 30.0
+  settle_hold_sec: 0.3
+  err_thresh_rad: 0.03
+  timeout_sec: 12.0
+  # 当前仅支持 abort_replay
+  fail_policy: "abort_replay"
+
+topics:
+  # 重播发布目标（从臂控制）
+  slave_joint_ctrl_tpl: "/{slave}/joint_ctrl_single"
+  # 慢速复位闭环反馈（从臂状态）
+  slave_joint_states_tpl: "/{slave}/joint_states_single"
+
+piper_ctrl_defaults:
+  auto_enable: true
+  gripper_exist: true
+  # false: skip SDK-side bitrate check (avoids dependency on `ip` command in minimal containers)
+  can_judge_flag: false
+  gripper_val_multiple: 1
+
+# 与录制侧 pair 名保持一致（用于匹配 HDF5: /slaves/{name}/positions）
+arm_pairs:
+  - name: "pair1"
+    slave: "slave1"
+    slave_can: "slave1"
+
+  - name: "pair2"
+    slave: "slave2"
+    slave_can: "slave2"
+
+
+ctrl_cmd:
+  joint_velocity_default: 0.0
+  joint_effort_default: 0.0
+  gripper_velocity: 100.0
+  gripper_effort: 1.0
+
+hdf5_keys:
+  timestamps: "timestamps"
+  slaves_group: "slaves"
+  # 录制时的相机组名（需与 teleop_raw_record.yaml hdf5_keys.cameras_group 一致）
+  cameras_group: "cameras"
+
+# ── OpenCV GUI 配置 ─────────────────────────────────────────────
+gui:
+  # 是否启用 OpenCV GUI（false = 纯命令行模式，与旧版相同）
+  enabled: true
+
+  # 是否在回放前弹出 episode 选择器
+  # false 时直接使用 replay.episode_file / replay.episode_id
+  show_selector: true
+
+  # GUI 窗口标题
+  window_name: "Teleop Raw Replay"
+
+  # 每个相机缩略图的显示尺寸（像素）
+  thumb_width: 320
+  thumb_height: 240
+
+  # 指定只显示哪些相机（空列表 = 显示所有）
+  # 例: ["left", "right"]
+  show_cameras: []

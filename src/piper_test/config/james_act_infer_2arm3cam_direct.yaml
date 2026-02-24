@@ -1,0 +1,40 @@
+model:
+  checkpoint_dir: "/workspace/piper_master_slave_ws/lerobot-server/pretrained_model"
+  device: "cuda"
+  temporal_ensemble_coeff: 0.01
+  action_dim: 14
+
+runtime:
+  rate_hz: 60.0
+  image_width: 256
+  image_height: 256
+  max_input_staleness_sec: 0.30
+  max_sync_delta_sec: 0.08
+  startup_grace_sec: 1.0
+  guard_profile: "medium" # conservative | medium | aggressive
+  enable_gripper: true
+  debug_streams: false
+  output_csv_path: "/workspace/piper_master_slave_ws/data/act_infer_model_outputs.csv"
+  output_csv_flush_hz: 5.0
+
+features:
+  state: "observation.state"
+  image_left: "observation.left_wrist_image"
+  image_right: "observation.right_wrist_image"
+  image_top: "observation.image"
+
+topics:
+  left_state: "/slave2/joint_states_single"   # swapped
+  right_state: "/slave1/joint_states_single"  # swapped
+  left_image: "/cam_left/color/image_raw"
+  right_image: "/cam_right/color/image_raw"
+  top_image: "/cam_top/color/image_raw"
+  left_cmd: "/slave2/joint_states"            # swapped
+  right_cmd: "/slave1/joint_states"           # swapped
+
+control_msg:
+  joint_names: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper"]
+  joint_velocity_default: 0.0
+  joint_effort_default: 0.0
+  gripper_velocity: 100.0
+  gripper_effort: 1.0

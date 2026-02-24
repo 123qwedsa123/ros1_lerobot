@@ -1,0 +1,34 @@
+<launch>
+  <!--
+    Alias launch for ACT policy server mode.
+    Client side is identical to replay-client server mode; only host server differs.
+  -->
+
+  <arg name="server_ip" default="172.17.0.1" />
+  <arg name="server_port" default="5560" />
+
+  <arg name="slave1_name" default="slave1" />
+  <arg name="slave2_name" default="slave2" />
+  <arg name="slave1_can" default="slave1" />
+  <arg name="slave2_can" default="slave2" />
+
+  <arg name="do_reset" default="true" />
+  <arg name="ready_timeout_sec" default="8.0" />
+  <arg name="reset_timeout_sec" default="12.0" />
+  <arg name="reset_err_thresh" default="0.03" />
+  <arg name="max_joint_speed_rad_s" default="0.10" />
+
+  <include file="$(find piper_test)/launch/teleop_raw_replay_client_server.launch">
+    <arg name="server_ip" value="$(arg server_ip)" />
+    <arg name="server_port" value="$(arg server_port)" />
+    <arg name="slave1_name" value="$(arg slave1_name)" />
+    <arg name="slave2_name" value="$(arg slave2_name)" />
+    <arg name="slave1_can" value="$(arg slave1_can)" />
+    <arg name="slave2_can" value="$(arg slave2_can)" />
+    <arg name="do_reset" value="$(arg do_reset)" />
+    <arg name="ready_timeout_sec" value="$(arg ready_timeout_sec)" />
+    <arg name="reset_timeout_sec" value="$(arg reset_timeout_sec)" />
+    <arg name="reset_err_thresh" value="$(arg reset_err_thresh)" />
+    <arg name="max_joint_speed_rad_s" value="$(arg max_joint_speed_rad_s)" />
+  </include>
+</launch>

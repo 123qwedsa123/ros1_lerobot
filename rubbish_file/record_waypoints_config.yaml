@@ -1,0 +1,28 @@
+# ============ Piper 机械臂路点记录配置文件 ============
+
+# CAN 端口名称
+can_port: "slave3"
+
+# 是否自动使能（launch 用，这里设为 true 让节点启动时先使能，
+# 之后我们的脚本会主动去使能来拖动）
+auto_enable: true
+
+# 夹爪是否存在
+gripper_exist: true
+
+# 订阅的末端位姿 topic 名称
+end_pose_topic: "/end_pose_euler"
+
+# 使能 topic 名称
+enable_topic: "/enable_flag"
+
+# CSV 保存路径（目录，文件名自动生成带时间戳）
+save_dir: "./waypoints_data"
+
+# 终端实时显示刷新频率 (Hz)
+display_rate: 10
+
+# 按键绑定
+key_record: "c"
+key_undo: "d"
+key_quit: "q"

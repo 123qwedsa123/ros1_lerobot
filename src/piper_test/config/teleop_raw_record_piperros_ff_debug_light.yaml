@@ -1,0 +1,273 @@
+# teleop_raw_record.yaml
+# 目标：只做“原始数据录制”，不在采集阶段拼 state/action（训练侧再转换）
+schema_version: 1
+
+global:
+  data_dir: "/workspace/piper_master_slave_ws/data"
+  rate_hz: 30
+
+  # HDF5 压缩与后台保存
+  save:
+    image_compression: "gzip"   # gzip | lzf | none
+    gzip_level: 4               # gzip 时有效，建议 4~6
+    save_queue_size: 2
+    wait_saves_on_exit: true
+
+  debug:
+    effort_print: true
+    effort_print_hz: 1.0
+
+# =========================
+# Topic 规则（可统一生成，避免每对手都手写）
+# 如果你未来换 topic，只改这里即可
+# =========================
+topics:
+  master_joint_states_tpl: "/{master}/joint_states_single"
+  slave_joint_states_tpl:  "/{slave}/joint_states_single"
+  slave_joint_states_compensated_tpl: "/{slave}/joint_states_compensated"
+  slave_joint_ctrl_tpl:    "/{slave}/joint_ctrl_single"
+  master_joint_ctrl_tpl:   "/{master}/joint_ctrl_single"
+
+# =========================
+# 力反馈
+# backend:
+#   - piperros_node: 推荐，按 piper_ctrl_node 风格做 master MIT 力反馈
+#   - legacy_sdk: 旧版，脚本直接用 SDK 发送 MIT 指令
+# =========================
+force_feedback:
+  enabled: true
+  backend: "piperros_node"
+
+  # piperros_node 下，master 节点参数（teleop_force_feedback_node.py）
+  node:
+    auto_enable: true
+    gripper_exist: true
+    gripper_val_multiple: 1.0
+    enable_gripper: true
+    enable_gripper_haptic: false
+    gripper_range: 0.08
+    gripper_reverse: false
+
+    ctrl_mode: "mit"
+    p_speed: 30
+    mit_speed: 50
+    mit_kp: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    mit_kd: [0.02, 0.03, 0.01, 0.02, 0.02, 0.02]
+    mit_enable_pos: false
+    mit_enable_vel: false
+    mit_enable_tor: false
+    mit_enable_gravity: false
+    mit_gravity_mix_mode: "additive"
+    mit_torque_scale: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_scale_left: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_scale_right: [1.0, 0.12, 0.2, 0.1, 0.2, 0.20]
+    mit_torque_feedback_sign: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_torque_feedback_sign_left: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_torque_feedback_sign_right: [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    mit_max_torque_abs: 8.0
+    enforce_joint_limits: false
+
+    gripper_haptic_effort_sign: -1.0
+    gripper_haptic_effort_deadband: 0.0
+    gripper_haptic_effort_bias: 0.20
+    gripper_haptic_effort_max: 0.02
+    gripper_haptic_cmd_max: 2000
+    gripper_haptic_cmd_enable_threshold: 1
+    gripper_haptic_effort_alpha: 0.85
+    gripper_haptic_release_when_opening: true
+    gripper_haptic_opening_relief: 0.00
+    gripper_haptic_opening_sign: 1.0
+    gripper_haptic_opening_direction_eps: 0.00002
+
+    publish_rate: 100.0
+    control_rate: 50.0
+    subscribe_rate: 50.0
+    filter_enable: true
+    filter_alpha_position: 0.7
+    filter_alpha_velocity: 0.5
+    filter_alpha_effort: 0.5
+
+    master_slave_enable: false
+    master_slave_flag_topic: "/conrft_robot/slave_follow_flag"
+    master_slave_kp_follow: [7.0, 7.0, 7.0, 7.0, 7.0, 7.0]
+    shutdown_mode: "hold"
+
+  gravity_compensation:
+    enabled: true
+    urdf_package: "piper_test"
+    urdf_relpath: "config/piper_x_description.urdf"
+    gravity_joint_scale_left: [1.0, 0.96, 0.97, 0.95, 1.0, 1.0]
+    gravity_joint_scale_right: [1.0, 0.96, 0.97, 0.95, 1.0, 1.0]
+    gravity_joint_sign_left: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_sign_right: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_position_scale_left: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_position_scale_right: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gravity_joint_offset_left: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    gravity_joint_offset_right: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    clip_to_limits: true
+    unwrap_joint_positions: true
+    max_joint_step: 0.08
+    max_torque_delta_warn: 2.0
+
+  # legacy_sdk 参数（仅当 backend=legacy_sdk 生效）
+  pos_diff_threshold: 0.02
+  joint_gain: 10.0
+  joint_ema_alpha: 0.4
+  mit_kp_free: 0.0
+  mit_kp_blocked: 80.0
+  mit_kd: 1.0
+  gripper_contact_threshold: 0.05
+  gripper_gain: 1.0
+  gripper_base_effort: 0.5
+  gripper_min_effort: 0.5
+  gripper_max_effort: 2.0
+  gripper_ema_alpha: 0.2
+  csv_log: true
+  csv_path: "/home/jinhe/Desktop/piper_master_slave_ws/piper_master_slave_ws/force_feedback_log.csv"
+  csv_flush_hz: 5.0
+
+# =========================
+# Piper 控制节点参数（用于自动启动 ctrl_node 时保持一致）
+# 如果你暂时不做自动启动，这段也可以保留备用
+# =========================
+piper_ctrl_defaults:
+  auto_enable: true
+  gripper_exist: true
+  gripper_val_multiple: 1
+
+# =========================
+# 显式加载 /robot_description（用于关节限位解析，避免回退 fallback_defaults）
+# =========================
+robot_description:
+  enabled: true
+  package: "piper_test"
+  relpath: "config/piper_x_description.urdf"
+  param: "/robot_description"
+
+# =========================
+# N 对主从（可任意增加/减少）
+# master/slave 这里建议用“命名空间名”，比如 master1、slave1
+# can_port 是你系统里对应的 CAN 设备名
+# =========================
+arm_pairs:
+  - name: "pair1"
+    master: "teleop/arm_left"
+    slave:  "robot/arm_left"
+    master_can: "master1"
+    slave_can:  "slave1"
+
+  - name: "pair2"
+    master: "teleop/arm_right"
+    slave:  "robot/arm_right"
+    master_can: "master2"
+    slave_can:  "slave2"
+
+# =========================
+# 录制哪些“原始字段”
+# 建议：slave 的 effort 一般很重要；master effort/vel 若无用可关
+# =========================
+recording:
+  per_arm_dim: 7    # 6 joints + gripper（用于 fix_len 补齐/截断）
+
+  master:
+    save_positions: true
+    save_velocities: false
+    save_efforts:   false
+    save_stamp:     true     # 保存 joint_state header.stamp
+
+  slave:
+    save_positions: true
+    save_velocities: true
+    save_efforts:   true
+    save_stamp:     true
+
+# =========================
+# 控制指令（master -> slave）JointState 中 velocity/effort 的固定填充值
+# 如果你只用 position 也行，但你当前代码会填这两个数组，放配置里更可控
+# =========================
+ctrl_cmd:
+  # 生成规则建议：前 6 维关节为 0，最后 1 维夹爪为指定值
+  joint_velocity_default: 0.0
+  joint_effort_default:   0.0
+  gripper_velocity: 100.0
+  gripper_effort:   1.0
+
+# =========================
+# 相机：M 台任意增减
+# topic 用模板自动生成：/cam_{name}/color/image_raw 等
+# enable_depth 和 save_depth 分开：
+# - enable_depth: 发布端是否发布 depth
+# - save_depth:   录制端是否写入 HDF5（通常要与 enable_depth 一致）
+# =========================
+camera_topics:
+  color_tpl: "/realsense_{name}/color/image_raw"
+  depth_tpl: "/realsense_{name}/depth/image_raw"
+
+cameras:
+  - name: "left"
+    device_name: "D405"
+    serial_no: "352122273242"   # 必须字符串
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true          # 保存 image header.stamp
+      save_width:  256          # 保存分辨率；不填则与 stream 一致
+      save_height: 256
+
+  - name: "right"
+    device_name: "D405"
+    serial_no: "352122273590"
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true
+      save_width:  256
+      save_height: 256
+
+  - name: "top"
+    device_name: "D435"
+    serial_no: "348522075799"
+    stream:
+      width: 640
+      height: 480
+      fps: 30
+      enable_depth: false
+    record:
+      save_color: true
+      save_depth: false
+      save_stamp: true
+      save_width:  256
+      save_height: 256
+
+# =========================
+# 多源时间对齐策略（采集端不拼 state，但建议至少定义“采样策略”）
+# latest: 每次 tick 取各路最新值（简单，常用）
+# nearest: 按 tick 时间找最近邻（需要你实现，精度更好）
+# =========================
+sync:
+  mode: "latest"     # latest | nearest
+  max_dt_sec: 0.05   # nearest 时才生效；latest 可忽略
+
+# =========================
+# HDF5 写入命名（只定义“原始键名规则”，保持稳定，后续转换更好写）
+# 建议结构：
+#   /timestamps
+#   /masters/{master}/pos vel eff stamp
+#   /slaves/{slave}/pos vel eff stamp
+#   /cameras/{cam}/color depth stamp
+# =========================
+hdf5_keys:
+  timestamps: "timestamps"
+  masters_group: "masters"
+  slaves_group: "slaves"
+  cameras_group: "cameras"

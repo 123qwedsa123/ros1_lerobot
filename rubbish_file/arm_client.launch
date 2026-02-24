@@ -1,0 +1,13 @@
+<!-- arm_client.launch -->
+<!-- 使用方式: roslaunch <your_package> arm_client.launch -->
+<!-- 或: rosrun 方式启动后手动传参 -->
+<launch>
+<launch>
+    <node name="arm_gaze_client"
+          pkg="piper"
+          type="arm_client.py"
+          output="screen">
+        <param name="config_path" 
+               value="/workspace/piper_master_slave_ws/arm_client_config.yaml"/>
+    </node>
+</launch>

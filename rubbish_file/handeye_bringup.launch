@@ -1,0 +1,10 @@
+<launch>
+    <!-- 只启动机械臂, 相机由Python脚本通过pyrealsense2直接驱动 -->
+    <arg name="can_port" default="slave1" />
+    <arg name="auto_enable" default="false" />
+
+    <include file="$(find piper)/launch/start_single_piper.launch">
+        <arg name="can_port" value="$(arg can_port)" />
+        <arg name="auto_enable" value="$(arg auto_enable)" />
+    </include>
+</launch>

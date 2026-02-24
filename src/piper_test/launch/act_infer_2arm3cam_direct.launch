@@ -1,0 +1,72 @@
+<launch>
+  <arg name="infer_config" default="$(find piper_test)/config/james_act_infer_2arm3cam_direct.yaml" />
+
+  <arg name="slave1_can" default="slave1" />
+  <arg name="slave2_can" default="slave2" />
+
+  <arg name="cam_left_serial" default="352122273242" />
+  <arg name="cam_right_serial" default="352122273590" />
+  <arg name="cam_top_serial" default="348522075799" />
+
+  <arg name="image_topic_left" default="/cam_left/color/image_raw" />
+  <arg name="image_topic_right" default="/cam_right/color/image_raw" />
+  <arg name="image_topic_top" default="/cam_top/color/image_raw" />
+
+  <group ns="slave1">
+    <node name="piper_ctrl_single_node" pkg="piper" type="piper_ctrl_single_node.py" output="screen">
+      <param name="can_port" value="$(arg slave1_can)" />
+      <param name="auto_enable" value="true" />
+      <param name="girpper_exist" value="true" />
+      <param name="gripper_val_mutiple" value="1" />
+      <remap from="joint_ctrl_single" to="joint_states" />
+    </node>
+  </group>
+
+  <group ns="slave2">
+    <node name="piper_ctrl_single_node" pkg="piper" type="piper_ctrl_single_node.py" output="screen">
+      <param name="can_port" value="$(arg slave2_can)" />
+      <param name="auto_enable" value="true" />
+      <param name="girpper_exist" value="true" />
+      <param name="gripper_val_mutiple" value="1" />
+      <remap from="joint_ctrl_single" to="joint_states" />
+    </node>
+  </group>
+
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_left" output="screen">
+    <param name="serial_no" value="$(arg cam_left_serial)" type="str" />
+    <param name="device_name" value="D405" />
+    <param name="color_topic" value="$(arg image_topic_left)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_right" output="screen">
+    <param name="serial_no" value="$(arg cam_right_serial)" type="str" />
+    <param name="device_name" value="D405" />
+    <param name="color_topic" value="$(arg image_topic_right)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <node pkg="piper_test" type="realsense_publisher2.py" name="realsense_publisher_cam_top" output="screen">
+    <param name="serial_no" value="$(arg cam_top_serial)" type="str" />
+    <param name="device_name" value="D435" />
+    <param name="color_topic" value="$(arg image_topic_top)" />
+    <param name="enable_depth" value="false" />
+    <param name="width" value="640" />
+    <param name="height" value="480" />
+    <param name="fps" value="30" />
+  </node>
+
+  <node pkg="piper_test" type="act_infer_2arm3cam_direct.py" name="act_infer_2arm3cam_direct" output="screen" required="true"
+        launch-prefix="/home/jinhe/miniconda3/envs/lerobot-mujoco/bin/python"
+        args="--config $(arg infer_config) --left-image-topic $(arg image_topic_left) --right-image-topic $(arg image_topic_right) --top-image-topic $(arg image_topic_top)">
+    <env name="PYTHONUNBUFFERED" value="1" />
+    <env name="PYTHONPATH" value="/opt/ros/noetic/lib/python3/dist-packages:/home/jinhe/miniconda3/envs/lerobot-mujoco/lib/python3.10/site-packages" />
+  </node>
+
+</launch>

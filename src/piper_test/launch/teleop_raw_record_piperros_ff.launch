@@ -1,0 +1,18 @@
+<launch>
+  <!--
+    Teleop + Camera + HDF5 recorder (PiperROS force-feedback backend)
+    Usage:
+      roslaunch piper_test teleop_raw_record_piperros_ff.launch
+      roslaunch piper_test teleop_raw_record_piperros_ff.launch config:=/path/to/config.yaml
+  -->
+
+  <arg name="config" default="$(find piper_test)/config/teleop_raw_record_piperros_ff.yaml" />
+
+  <node pkg="piper_test"
+        type="teleop_raw_system_piperros_ff.py"
+        name="teleop_raw_system_piperros_ff"
+        output="screen"
+        required="true">
+    <param name="config_file" value="$(arg config)" />
+  </node>
+</launch>

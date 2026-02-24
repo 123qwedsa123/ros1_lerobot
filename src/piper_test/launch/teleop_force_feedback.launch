@@ -1,0 +1,56 @@
+<launch>
+  <!--
+    Reshaped force-feedback teleop from catkin_ws:
+    - master1 teleop follows force from slave1
+    - master2 teleop follows force from slave2
+    slave3 name is kept as an arg for namespace consistency.
+  -->
+
+  <arg name="config" default="$(find piper_test)/config/teleop_force_feedback.yaml" />
+
+  <arg name="master1_name" default="master1" />
+  <arg name="master2_name" default="master2" />
+  <arg name="slave1_name" default="slave1" />
+  <arg name="slave2_name" default="slave2" />
+  <arg name="slave3_name" default="slave3" />
+
+  <arg name="master1_can" default="$(arg master1_name)" />
+  <arg name="master2_can" default="$(arg master2_name)" />
+
+  <arg name="master_slave_enable" default="false" />
+  <arg name="master_slave_flag_topic" default="/conrft_robot/slave_follow_flag" />
+
+  <node name="piper_teleop_master1_node" pkg="piper_test" type="teleop_force_feedback_node.py" output="screen">
+    <rosparam file="$(arg config)" command="load" />
+
+    <param name="can_port" value="$(arg master1_can)" />
+    <param name="topic_prefix" value="/$(arg master1_name)/" />
+
+    <param name="master_slave/enable" value="$(arg master_slave_enable)" />
+    <param name="master_slave/master_position_topic" value="/$(arg slave1_name)/joint_states_single" />
+    <param name="master_slave/master_flag_topic" value="$(arg master_slave_flag_topic)" />
+
+    <param name="remap/joint_pos_cmd_to" value="/$(arg master1_name)/joint_states_single" />
+    <param name="remap/joint_tor_cmd_to" value="/$(arg slave1_name)/joint_states_single" />
+    <param name="remap/joint_states_compensated_to" value="/$(arg slave1_name)/joint_states_compensated" />
+    <param name="remap/gripper_pos_cmd_to" value="/$(arg master1_name)/joint_states_single" />
+    <param name="remap/gripper_effort_cmd_to" value="/$(arg slave1_name)/joint_states_single" />
+  </node>
+
+  <node name="piper_teleop_master2_node" pkg="piper_test" type="teleop_force_feedback_node.py" output="screen">
+    <rosparam file="$(arg config)" command="load" />
+
+    <param name="can_port" value="$(arg master2_can)" />
+    <param name="topic_prefix" value="/$(arg master2_name)/" />
+
+    <param name="master_slave/enable" value="$(arg master_slave_enable)" />
+    <param name="master_slave/master_position_topic" value="/$(arg slave2_name)/joint_states_single" />
+    <param name="master_slave/master_flag_topic" value="$(arg master_slave_flag_topic)" />
+
+    <param name="remap/joint_pos_cmd_to" value="/$(arg master2_name)/joint_states_single" />
+    <param name="remap/joint_tor_cmd_to" value="/$(arg slave2_name)/joint_states_single" />
+    <param name="remap/joint_states_compensated_to" value="/$(arg slave2_name)/joint_states_compensated" />
+    <param name="remap/gripper_pos_cmd_to" value="/$(arg master2_name)/joint_states_single" />
+    <param name="remap/gripper_effort_cmd_to" value="/$(arg slave2_name)/joint_states_single" />
+  </node>
+</launch>

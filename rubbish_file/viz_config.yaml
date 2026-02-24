@@ -1,0 +1,24 @@
+# ============================================================
+# 实时可视化 + 点击取坐标 - 配置文件
+# ============================================================
+
+# --- 标定结果文件路径 (calibrate.py 的输出) ---
+calibration_file: "calibration_result.yaml"
+
+# --- 相机 ---
+camera_serial: "352122273242"
+camera_width: 640
+camera_height: 480
+camera_fps: 30
+
+# --- ROS ---
+end_pose_topic: "/end_pose"
+end_pose_type: "PoseStamped"
+
+# --- 可视化 ---
+axis_length: 0.08          # 坐标轴画线长度 (米)
+grid_spacing: 0.02         # 网格间距 (米), 0则不画网格
+grid_range_x: 0.15         # 网格X方向半径 (米)
+grid_range_y: 0.10         # 网格Y方向半径 (米)
+click_marker_radius: 6     # 点击标记圆圈半径 (像素)
+coord_display_time: 3.0    # 坐标显示持续时间 (秒)

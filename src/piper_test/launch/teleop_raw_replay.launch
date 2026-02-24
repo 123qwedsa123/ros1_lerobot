@@ -1,0 +1,14 @@
+<launch>
+  <!--
+    Teleop raw 数据重播 launch
+    用法:
+      roslaunch piper_test teleop_raw_replay.launch
+      roslaunch piper_test teleop_raw_replay.launch config:=/path/to/teleop_raw_replay.yaml
+  -->
+  <arg name="config" default="$(find piper_test)/config/teleop_raw_replay.yaml" />
+
+  <node pkg="piper_test" type="teleop_raw_replay.py" name="teleop_raw_replay"
+        output="screen" required="true">
+    <param name="config_file" value="$(arg config)" />
+  </node>
+</launch>

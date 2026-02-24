@@ -1,0 +1,42 @@
+# ============================================================
+#  Arm Client 配置文件 (Docker ROS1 端)
+# ============================================================
+
+# --- ZeroMQ ---
+zmq:
+  server_ip: "172.17.0.1"       # --network host 用 127.0.0.1
+  sub_port: 5555
+  push_port: 5556
+
+# --- Piper 驱动话题 ---
+arm:
+  pos_cmd_topic: "/pos_cmd"                   # PosCmd 控制话题
+  end_pose_topic: "/end_pose_euler"           # 当前位姿反馈
+  enable_topic: "/enable_flag"
+  pos_cmd_msg_type: "PosCmd"                  # piper_msgs/PosCmd
+  end_pose_msg_type: "PiperEulerPose"
+
+# --- PosCmd 参数 ---
+pos_cmd:
+  mode1: 1                # 控制模式 (1=位置模式)
+  mode2: 0
+  gripper: 0.0            # 夹爪开度
+
+# --- 到位判定 ---
+arrive_tolerance_pos: 0.01
+arrive_tolerance_ori: 0.05
+
+# --- 心跳超时 ---
+heartbeat_timeout_sec: 3.0
+
+# --- 控制频率 ---
+loop_rate_hz: 20
+
+# --- 安全位姿 ---
+safe_pose:
+  x: 0.25
+  y: 0.0
+  z: 0.35
+  roll: 0.0
+  pitch: 0.0
+  yaw: 0.0

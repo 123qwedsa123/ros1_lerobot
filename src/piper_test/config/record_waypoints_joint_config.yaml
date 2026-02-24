@@ -1,0 +1,40 @@
+# ============ Piper 机械臂路点记录配置文件 (关节角版本) ============
+
+can_port: "slave3"
+
+camera_device: 20
+camera_width: 640
+camera_height: 480
+
+# ---------- 关节角话题配置 ----------
+# 默认读取驱动发布的反馈关节角
+# 如在命名空间下运行，会自动尝试 /{can_port}/joint_states_single
+joint_state_topic: "joint_states_single"
+enable_topic: "enable_flag"
+# 支持 "JointState" 或 "sensor_msgs/JointState"
+joint_state_msg_type: "JointState"
+# false: 不自动切换使能（推荐，防止下坠风险）
+# true: 录点时自动去使能，退出时再使能
+toggle_enable_during_recording: false
+
+# 关节字段前缀和数量
+# 假设消息字段为 joint1, joint2, ... joint7
+joint_field_prefix: "joint"
+num_joints: 7
+
+# ---------- 十字线 ----------
+crosshair_color: [0, 0, 255]
+crosshair_thickness: 1
+center_radius: 6
+
+# ---------- 保存路径 ----------
+save_dir: "/home/jinhe/Desktop/piper_master_slave_ws/piper_master_slave_ws/waypoints_data_joint"
+
+# ---------- 快捷键 ----------
+key_record: "c"
+key_undo: "d"
+key_quit: "q"
+
+# ---------- 闪烁反馈 ----------
+flash_color: [0, 255, 0]
+flash_duration_ms: 300

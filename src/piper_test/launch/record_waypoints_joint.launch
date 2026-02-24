@@ -1,0 +1,13 @@
+<launch>
+  <arg name="config" default="$(find piper_test)/config/record_waypoints_joint_config.yaml"/>
+
+  <!-- 启动 Piper 驱动节点，提供关节反馈 -->
+  <node name="piper_ctrl_single_node" pkg="piper" type="piper_ctrl_single_node.py" output="screen">
+    <rosparam file="$(arg config)" command="load"/>
+    <remap from="joint_ctrl_single" to="/joint_states"/>
+  </node>
+
+  <node name="record_waypoints" pkg="piper_test" type="record_waypoints_joint.py" output="screen">
+    <rosparam file="$(arg config)" command="load"/>
+  </node>
+</launch>
