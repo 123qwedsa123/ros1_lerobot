@@ -1,0 +1,43 @@
+# bag_convert_config.yaml
+# ROS bag → LeRobot 数据集转换配置
+# 用法: python bag_to_lerobot.py --config bag_convert_config.yaml
+
+convert:
+  # ── 路径 ──────────────────────────────────────────
+  session_dir:   "act_data"   # 包含 episode_*/episode.bag 的目录
+  output_root:   "lerobot_data/lerobot"                        # 输出根目录
+  dataset_id:    "act"             # 数据集文件夹名
+  clean_output:  true              # 每次 Phase1 前清空 output_root/dataset_id，避免旧文件混入
+
+  # ── 任务 / 采样 ───────────────────────────────────
+  task:          "bimanual teleop"
+  fps:           30.0
+  min_frames:    32
+  max_sync_lag_sec: 0.08
+
+  # ── 机械臂关节维度 ────────────────────────────────
+  pos_dim_per_arm:    7    # robot position 维度
+  effort_dim_per_arm: 7    # robot effort 维度
+  action_dim_per_arm: 7    # teleop position 维度
+
+  # ── 图像 ──────────────────────────────────────────
+  image_width:  256
+  image_height: 256
+  video_codec:  "mp4v"
+  image_use_bag_time: false   # true = 用 bag 接收时间而非 header stamp
+
+  # ── ROS Topics ────────────────────────────────────
+  topics:
+    robot_left:   "/robot/arm_left/joint_states_single"
+    robot_right:  "/robot/arm_right/joint_states_single"
+    teleop_left:  "/teleop/arm_left/joint_states_single"
+    teleop_right: "/teleop/arm_right/joint_states_single"
+    top_camera:   "/realsense_top/color/image_raw/compressed"
+    left_wrist:   "/realsense_left/color/image_raw/compressed"
+    right_wrist:  "/realsense_right/color/image_raw/compressed"
+
+  # ── v3.0 升级（可选）─────────────────────────────
+  convert_to_v30:     true
+  delete_v21_backup_after_v30: false  # true: Phase2 成功后删除 <dataset_id>_old，仅保留 v3.0
+  v30_push_to_hub:    false
+  v30_force_conversion: false

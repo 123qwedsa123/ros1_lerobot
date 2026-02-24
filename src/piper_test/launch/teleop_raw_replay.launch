@@ -1,6 +1,6 @@
 <launch>
   <!--
-    Teleop raw 数据重播 launch
+    Teleop raw 数据重播 launch (BAG only)
     用法:
       roslaunch piper_test teleop_raw_replay.launch
       roslaunch piper_test teleop_raw_replay.launch config:=/path/to/teleop_raw_replay.yaml

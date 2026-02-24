@@ -1,43 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Teleop raw HDF5 replay with safe slow reset + OpenCV GUI.
+Teleop raw BAG replay with safe slow reset + OpenCV GUI.
 
 GUI features:
-  - Episode selector: browse all episodes in data_dir, pick one to replay
-  - Camera viewer:    shows recorded camera images frame-by-frame during replay
+  - Episode selector: browse episode_XXX/episode*.bag in data_dir
+  - Camera viewer:    shows recorded camera images frame-by-frame
   - Playback controls via keyboard (window must have focus):
       SPACE   pause / resume
       L       toggle loop
-      + / =   speed up  (×1.5)
-      -       slow down (÷1.5)
+      + / =   speed up  (x1.5)
+      -       slow down (x1/1.5)
       Q / ESC stop and quit
   - Episode selector navigation:
-      W / ↑   move selection up
-      S / ↓   move selection down
-      ENTER   start replay
-      Q / ESC quit
+      W / Up   move selection up
+      S / Down move selection down
+      ENTER    start replay
+      Q / ESC  quit
 
 Usage:
   roslaunch piper_test teleop_raw_replay.launch
   roslaunch piper_test teleop_raw_replay.launch config:=/path/to/teleop_raw_replay.yaml
 """
 
+import json
 import math
 import os
 import re
 import time
 
 import cv2
-import h5py
 import numpy as np
+import rosbag
 import roslaunch
 import rospy
 import yaml
 from sensor_msgs.msg import JointState
 
 
-# ─────────────────────────── helpers ───────────────────────────
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 
 def fix_len(values, n, fill=0.0):
     items = list(values) if values is not None else []
@@ -76,37 +79,117 @@ def as_bool(value, default):
     return bool(default)
 
 
-# ─────────────────────────── main class ───────────────────────────
+def unique_keep_order(items):
+    out = []
+    seen = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def msg_stamp(msg, bag_t):
+    header = getattr(msg, "header", None)
+    if header is not None:
+        st = getattr(header, "stamp", None)
+        if st is not None:
+            sec = float(st.to_sec())
+            if sec > 0.0:
+                return sec
+    return float(bag_t.to_sec())
+
+
+def infer_cam_key(topic):
+    if "/color/image_raw" in topic:
+        prefix = topic.split("/color/image_raw")[0]
+        key = prefix.strip("/").split("/")[-1]
+    else:
+        key = topic.strip("/").split("/")[-1]
+    for pfx in ("realsense_", "camera_", "cam_"):
+        if key.startswith(pfx):
+            key = key[len(pfx):]
+            break
+    return key
+
+
+def decode_color_image(msg):
+    # CompressedImage
+    if hasattr(msg, "format") and hasattr(msg, "data"):
+        arr = np.frombuffer(msg.data, dtype=np.uint8)
+        if arr.size == 0:
+            return None
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+    # sensor_msgs/Image
+    h = int(getattr(msg, "height", 0))
+    w = int(getattr(msg, "width", 0))
+    step = int(getattr(msg, "step", 0))
+    if h <= 0 or w <= 0 or step <= 0:
+        return None
+    data = np.frombuffer(msg.data, dtype=np.uint8)
+    if data.size < h * step:
+        return None
+    img = data.reshape(h, step)
+    enc = str(getattr(msg, "encoding", "")).lower()
+
+    if enc == "bgr8":
+        if img.shape[1] < w * 3:
+            return None
+        return img[:, : w * 3].reshape(h, w, 3)
+    if enc == "rgb8":
+        if img.shape[1] < w * 3:
+            return None
+        rgb = img[:, : w * 3].reshape(h, w, 3)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    if enc == "bgra8":
+        if img.shape[1] < w * 4:
+            return None
+        bgra = img[:, : w * 4].reshape(h, w, 4)
+        return cv2.cvtColor(bgra, cv2.COLOR_BGRA2BGR)
+    if enc == "rgba8":
+        if img.shape[1] < w * 4:
+            return None
+        rgba = img[:, : w * 4].reshape(h, w, 4)
+        return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
+    if enc in ("mono8", "8uc1"):
+        if img.shape[1] < w:
+            return None
+        gray = img[:, :w].reshape(h, w)
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    if img.shape[1] >= w * 3:
+        return img[:, : w * 3].reshape(h, w, 3)
+    return None
+
 
 class TeleopRawReplay:
 
-    # ── init ──────────────────────────────────────────────────────
     def __init__(self):
         rospy.init_node("teleop_raw_replay", anonymous=True)
 
         config_file = rospy.get_param("~config_file")
-        with open(config_file, "r") as f:
-            self.cfg = yaml.safe_load(f)
+        with open(config_file, "r", encoding="utf-8") as f:
+            self.cfg = yaml.safe_load(f) or {}
 
-        # ---------- global ----------
         g = self.cfg.get("global", {})
-        self.data_dir = str(g.get("data_dir", "/home/jinhe/Desktop/piper_master_slave_ws/piper_master_slave_ws/data"))
+        self.data_dir = str(g.get("data_dir", "/workspace/piper_master_slave_ws/data"))
         self.fallback_rate_hz = max(as_float(g.get("fallback_rate_hz", 30.0), 30.0), 1e-6)
         self.ctrl_startup_wait_sec = max(as_float(g.get("ctrl_startup_wait_sec", 2.0), 2.0), 0.0)
         self.ctrl_ready_timeout_sec = max(as_float(g.get("ctrl_ready_timeout_sec", 8.0), 8.0), 0.0)
         self.min_dt_sec = max(as_float(g.get("min_dt_sec", 0.001), 0.001), 0.0)
         self.max_dt_sec = max(as_float(g.get("max_dt_sec", 0.2), 0.2), self.min_dt_sec)
 
-        # ---------- replay ----------
         r = self.cfg.get("replay", {})
         self.episode_file = str(r.get("episode_file", "")).strip()
         self.episode_id = as_int(r.get("episode_id", -1), -1)
+        self.replay_session_name = str(r.get("session_name", "")).strip()
         self.speed_scale = max(as_float(r.get("speed_scale", 1.0), 1.0), 1e-6)
         self.loop = as_bool(r.get("loop", False), False)
         self.hold_last_sec = max(as_float(r.get("hold_last_sec", 1.0), 1.0), 0.0)
         self.hold_hz = max(as_float(r.get("hold_hz", 10.0), 10.0), 1e-6)
 
-        # ---------- safety reset ----------
         sr = self.cfg.get("safety_reset", {})
         self.reset_enabled = as_bool(sr.get("enabled", True), True)
         self.reset_max_joint_speed_rad_s = max(
@@ -125,7 +208,6 @@ class TeleopRawReplay:
             )
             self.reset_fail_policy = "abort_replay"
 
-        # ---------- topics / ctrl ----------
         topics = self.cfg.get("topics", {})
         self.slave_joint_ctrl_tpl = str(
             topics.get("slave_joint_ctrl_tpl", "/{slave}/joint_ctrl_single")
@@ -149,10 +231,21 @@ class TeleopRawReplay:
         self.gripper_velocity = as_float(cc.get("gripper_velocity", 100.0), 100.0)
         self.gripper_effort = as_float(cc.get("gripper_effort", 1.0), 1.0)
 
-        keys = self.cfg.get("hdf5_keys", {})
-        self.key_timestamps = str(keys.get("timestamps", "timestamps"))
-        self.key_slaves_group = str(keys.get("slaves_group", "slaves"))
-        self.key_cameras_group = str(keys.get("cameras_group", "cameras"))
+        bag_cfg = self.cfg.get("bag", {})
+        self.bag_use_metadata_topics = as_bool(
+            bag_cfg.get("use_metadata_topics", True), True
+        )
+        self.bag_slave_joint_state_topics = bag_cfg.get("slave_joint_state_topics", []) or []
+        if not isinstance(self.bag_slave_joint_state_topics, list):
+            self.bag_slave_joint_state_topics = []
+        self.bag_pair_slave_joint_topic_map = (
+            bag_cfg.get("pair_slave_joint_topic_map", {}) or {}
+        )
+        if not isinstance(self.bag_pair_slave_joint_topic_map, dict):
+            self.bag_pair_slave_joint_topic_map = {}
+        self.bag_camera_topics = bag_cfg.get("camera_topics", {}) or {}
+        if not isinstance(self.bag_camera_topics, dict):
+            self.bag_camera_topics = {}
 
         self.arm_pairs = self.cfg.get("arm_pairs", [])
         if not self.arm_pairs:
@@ -164,18 +257,14 @@ class TeleopRawReplay:
 
         os.makedirs(self.data_dir, exist_ok=True)
 
-        # ---------- GUI config ----------
         gui_cfg = self.cfg.get("gui", {})
         self.gui_enabled = as_bool(gui_cfg.get("enabled", True), True)
         self.gui_window_name = str(gui_cfg.get("window_name", "Teleop Raw Replay"))
         self.gui_show_selector = as_bool(gui_cfg.get("show_selector", True), True)
-        # list of camera names to display; empty = show all
         self.gui_show_cameras = gui_cfg.get("show_cameras", []) or []
-        # thumbnail size per camera in the replay view
         self.gui_thumb_w = as_int(gui_cfg.get("thumb_width", 320), 320)
         self.gui_thumb_h = as_int(gui_cfg.get("thumb_height", 240), 240)
 
-        # ---------- runtime ----------
         self.launcher = None
         self.ctrl_pubs = {}
         self.slave_states = {}
@@ -183,12 +272,15 @@ class TeleopRawReplay:
 
         self.selected_episode_path = ""
         self.selected_episode_id = -1
+        self.selected_episode_label = ""
+        self.selected_episode_metadata = {}
         self.frame_count = 0
         self.timestamps = None
         self.replay_pos = {}
+        self.replay_joint_topic_map = {}
+        self.camera_topic_map = {}
 
-        # GUI runtime state
-        self.camera_images = {}   # cam_name -> np.ndarray (N, H, W, 3) BGR
+        self.camera_images = {}
         self.paused = False
         self.stop_requested = False
 
@@ -196,7 +288,9 @@ class TeleopRawReplay:
         self._setup_ros()
         self._print_banner()
 
-    # ── child nodes ───────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # child nodes
+    # -----------------------------------------------------------------------
     def _preflight_can_interfaces(self):
         missing = []
         not_up = []
@@ -259,7 +353,9 @@ class TeleopRawReplay:
         if self.ctrl_startup_wait_sec > 0:
             rospy.sleep(self.ctrl_startup_wait_sec)
 
-    # ── ROS setup ─────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # ROS setup
+    # -----------------------------------------------------------------------
     def _setup_ros(self):
         for pair in self.arm_pairs:
             pair_name = pair["name"]
@@ -290,10 +386,11 @@ class TeleopRawReplay:
 
     def _print_banner(self):
         rospy.loginfo("=" * 70)
-        rospy.loginfo("Teleop Raw Replay (safe slow reset + OpenCV GUI)")
+        rospy.loginfo("Teleop Raw Replay (BAG only)")
         rospy.loginfo("  data_dir          = %s", self.data_dir)
         rospy.loginfo("  episode_file      = %s", self.episode_file if self.episode_file else "(auto)")
         rospy.loginfo("  episode_id        = %d", self.episode_id)
+        rospy.loginfo("  session_name      = %s", self.replay_session_name if self.replay_session_name else "(all)")
         rospy.loginfo("  speed_scale       = %.3f", self.speed_scale)
         rospy.loginfo("  loop              = %s", self.loop)
         rospy.loginfo("  hold_last         = %.2fs @ %.2fHz", self.hold_last_sec, self.hold_hz)
@@ -312,9 +409,10 @@ class TeleopRawReplay:
         rospy.loginfo("  gui.show_selector = %s", self.gui_show_selector)
         rospy.loginfo("=" * 70)
 
-    # ── wait for slave states ──────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # wait slave states
+    # -----------------------------------------------------------------------
     def _wait_slave_states_ready(self):
-        """Wait for all slave JointState topics. Shows a GUI screen if gui_enabled."""
         if self.gui_enabled:
             return self._wait_slave_states_gui()
         return self._wait_slave_states_headless()
@@ -334,9 +432,9 @@ class TeleopRawReplay:
         return False
 
     def _wait_slave_states_gui(self):
-        W, H = 640, 220
+        w, h = 640, 220
         cv2.namedWindow(self.gui_window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-        cv2.resizeWindow(self.gui_window_name, W, H)
+        cv2.resizeWindow(self.gui_window_name, w, h)
 
         start_time = time.time()
         dot_count = 0
@@ -351,135 +449,413 @@ class TeleopRawReplay:
                 rospy.logfatal("[READY] timeout, missing=%s", missing)
                 return False
 
-            canvas = np.full((H, W, 3), 30, dtype=np.uint8)
-            cv2.rectangle(canvas, (0, 0), (W, 50), (40, 40, 60), -1)
-            cv2.putText(canvas, self.gui_window_name,
-                        (15, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (220, 220, 255), 1)
+            canvas = np.full((h, w, 3), 30, dtype=np.uint8)
+            cv2.rectangle(canvas, (0, 0), (w, 50), (40, 40, 60), -1)
+            cv2.putText(
+                canvas, self.gui_window_name, (15, 34),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (220, 220, 255), 1
+            )
 
             dots = "." * (dot_count % 4)
             msg = "Waiting for arm controllers" + dots
-            cv2.putText(canvas, msg, (30, 95),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 100), 1)
-            cv2.putText(canvas, "Missing: " + ", ".join(missing),
-                        (30, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (160, 100, 100), 1)
+            cv2.putText(
+                canvas, msg, (30, 95),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 100), 1
+            )
+            cv2.putText(
+                canvas, "Missing: " + ", ".join(missing), (30, 130),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (160, 100, 100), 1
+            )
             remain = max(0, int(self.ctrl_ready_timeout_sec - elapsed))
-            cv2.putText(canvas, "Timeout in {}s  |  [Q] Quit".format(remain),
-                        (30, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 100, 100), 1)
+            cv2.putText(
+                canvas, "Timeout in {}s  |  [Q] Quit".format(remain), (30, 170),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 100, 100), 1
+            )
 
             cv2.imshow(self.gui_window_name, canvas)
             key = cv2.waitKey(200) & 0xFF
-            if key in (ord('q'), ord('Q'), 27):
+            if key in (ord("q"), ord("Q"), 27):
                 return False
             dot_count += 1
         return False
 
-    # ── episode scanning ──────────────────────────────────────────
-    def _scan_all_episodes(self):
-        """Return sorted list of (episode_id, path) from data_dir."""
-        files = []
+    # -----------------------------------------------------------------------
+    # episode discovery + metadata
+    # -----------------------------------------------------------------------
+    def _find_bag_in_episode_dir(self, ep_dir):
+        if not os.path.isdir(ep_dir):
+            return None
+        bag_names = []
         try:
-            for name in os.listdir(self.data_dir):
-                m = re.match(r"^episode_(\d+)\.hdf5$", name)
-                if m:
-                    files.append((int(m.group(1)), os.path.join(self.data_dir, name)))
+            for name in os.listdir(ep_dir):
+                if re.match(r"^episode.*\.bag$", name):
+                    bag_names.append(name)
+        except OSError:
+            return None
+        if not bag_names:
+            return None
+        bag_names.sort()
+        return os.path.join(ep_dir, bag_names[0])
+
+    def _load_episode_metadata(self, bag_path):
+        meta_path = os.path.join(os.path.dirname(os.path.abspath(bag_path)), "metadata.json")
+        if not os.path.isfile(meta_path):
+            return {}
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+                if isinstance(obj, dict):
+                    return obj
+        except Exception as exc:
+            rospy.logwarn("[BAG] failed to read metadata %s: %s", meta_path, exc)
+        return {}
+
+    def _topic_message_count(self, topic_info, topic):
+        info = topic_info.get(topic)
+        if info is None:
+            return 0
+        msg_count = getattr(info, "message_count", None)
+        if msg_count is None and isinstance(info, tuple) and len(info) >= 2:
+            msg_count = info[1]
+        if msg_count is None:
+            return 0
+        try:
+            return int(msg_count)
+        except Exception:
+            return 0
+
+    def _scan_all_episodes(self):
+        episodes = []
+        data_dir_abs = os.path.abspath(self.data_dir)
+        try:
+            for root, dirs, _files in os.walk(self.data_dir):
+                base = os.path.basename(root)
+                m = re.match(r"^episode_(\d+)$", base)
+                if not m:
+                    continue
+
+                parent = os.path.abspath(os.path.dirname(root))
+                session_name = "" if parent == data_dir_abs else os.path.basename(parent)
+                if self.replay_session_name and session_name != self.replay_session_name:
+                    dirs[:] = []
+                    continue
+
+                bag_path = self._find_bag_in_episode_dir(root)
+                if not bag_path:
+                    dirs[:] = []
+                    continue
+
+                try:
+                    mtime = float(os.path.getmtime(bag_path))
+                except OSError:
+                    mtime = 0.0
+
+                if session_name:
+                    display = "{}/{}".format(session_name, base)
+                else:
+                    display = base
+
+                episodes.append(
+                    {
+                        "eid": int(m.group(1)),
+                        "path": bag_path,
+                        "session": session_name,
+                        "display": display,
+                        "mtime": mtime,
+                    }
+                )
+                dirs[:] = []
         except OSError:
             pass
-        return sorted(files, key=lambda x: x[0])
 
-    def _get_episode_meta(self, path):
-        """Quick-read: return (n_frames, cam_names) from an HDF5 file."""
+        episodes.sort(key=lambda x: (x["mtime"], x["eid"], x["display"]))
+        return episodes
+
+    # -----------------------------------------------------------------------
+    # topic mapping
+    # -----------------------------------------------------------------------
+    def _infer_slave_joint_topics(self, bag_topics, metadata):
+        bag_set = set(bag_topics)
+        candidates = []
+
+        for item in self.bag_slave_joint_state_topics:
+            topic = str(item).strip()
+            if topic:
+                candidates.append(topic)
+
+        if self.bag_use_metadata_topics and metadata:
+            rec = (((metadata.get("topics") or {}).get("recorded")) or [])
+            for topic in rec:
+                t = str(topic).strip()
+                if not t.endswith("/joint_states_single"):
+                    continue
+                if "/teleop/" in t.lower():
+                    continue
+                candidates.append(t)
+
+        for topic in bag_topics:
+            if topic.endswith("/joint_states_single") and "/teleop/" not in topic.lower():
+                candidates.append(topic)
+
+        if len(candidates) < len(self.arm_pairs):
+            for topic in bag_topics:
+                if topic.endswith("/joint_states_single"):
+                    candidates.append(topic)
+
+        merged = unique_keep_order(candidates)
+        return [t for t in merged if t in bag_set]
+
+    def _resolve_pair_source_topics(self, bag_topics, metadata, strict=True):
+        bag_set = set(bag_topics)
+        pair_names = [p["name"] for p in self.arm_pairs]
+
+        per_pair_explicit = {}
+        all_per_pair_provided = True
+        for p in self.arm_pairs:
+            topic = str(
+                p.get("replay_slave_joint_topic", p.get("replay_topic", ""))
+            ).strip()
+            if not topic:
+                all_per_pair_provided = False
+                break
+            per_pair_explicit[p["name"]] = topic
+        if all_per_pair_provided:
+            missing = [t for t in per_pair_explicit.values() if t not in bag_set]
+            if missing and strict:
+                raise RuntimeError(
+                    "configured arm_pairs[*].replay_slave_joint_topic missing in bag: {}".format(
+                        missing
+                    )
+                )
+            if not missing:
+                return per_pair_explicit
+            return {}
+
+        if self.bag_pair_slave_joint_topic_map:
+            mapping = {}
+            missing_cfg = []
+            missing_bag = []
+            for pn in pair_names:
+                topic = str(self.bag_pair_slave_joint_topic_map.get(pn, "")).strip()
+                if not topic:
+                    missing_cfg.append(pn)
+                    continue
+                mapping[pn] = topic
+                if topic not in bag_set:
+                    missing_bag.append(topic)
+            if missing_cfg and strict:
+                raise RuntimeError(
+                    "bag.pair_slave_joint_topic_map missing pair keys: {}".format(missing_cfg)
+                )
+            if missing_bag and strict:
+                raise RuntimeError(
+                    "bag.pair_slave_joint_topic_map topics missing in bag: {}".format(missing_bag)
+                )
+            if not missing_cfg and not missing_bag:
+                return mapping
+            if strict:
+                return {}
+
+        inferred = self._infer_slave_joint_topics(bag_topics, metadata)
+        if len(inferred) < len(pair_names):
+            if strict:
+                raise RuntimeError(
+                    "not enough slave joint topics in bag. need={} got={} candidates={}".format(
+                        len(pair_names), len(inferred), inferred
+                    )
+                )
+            return {}
+
+        mapping = {}
+        for idx, pn in enumerate(pair_names):
+            mapping[pn] = inferred[idx]
+        return mapping
+
+    def _resolve_camera_topics(self, bag_topics, metadata, strict=False):
+        bag_set = set(bag_topics)
+        show_only = [str(x).strip() for x in self.gui_show_cameras if str(x).strip()]
+
+        if self.bag_camera_topics:
+            out = {}
+            missing = []
+            for cam_name, topic in self.bag_camera_topics.items():
+                name = str(cam_name).strip()
+                t = str(topic).strip()
+                if not name or not t:
+                    continue
+                if show_only and name not in show_only:
+                    continue
+                if t not in bag_set:
+                    missing.append("{}:{}".format(name, t))
+                    continue
+                out[name] = t
+            if missing and strict:
+                raise RuntimeError("bag.camera_topics missing in bag: {}".format(missing))
+            if out:
+                return out
+            if strict and show_only:
+                raise RuntimeError("bag.camera_topics has no usable camera topics")
+
+        candidates = []
+        if self.bag_use_metadata_topics and metadata:
+            rec = (((metadata.get("topics") or {}).get("recorded")) or [])
+            for topic in rec:
+                t = str(topic).strip()
+                if "/color/image_raw" not in t:
+                    continue
+                if t.endswith("/compressed") or t.endswith("/image_raw"):
+                    candidates.append(t)
+        for topic in bag_topics:
+            if "/color/image_raw" in topic and (
+                topic.endswith("/compressed") or topic.endswith("/image_raw")
+            ):
+                candidates.append(topic)
+
+        candidates = [t for t in unique_keep_order(candidates) if t in bag_set]
+        if not candidates:
+            return {}
+
+        by_key = {}
+        for t in sorted(candidates):
+            key = infer_cam_key(t)
+            old = by_key.get(key)
+            if old is None:
+                by_key[key] = t
+            else:
+                old_comp = old.endswith("/compressed")
+                new_comp = t.endswith("/compressed")
+                if new_comp and not old_comp:
+                    by_key[key] = t
+
+        preferred = list(show_only)
+        if not preferred and metadata:
+            cams = (((metadata.get("recording") or {}).get("cameras")) or [])
+            preferred = [str(c).strip() for c in cams if str(c).strip()]
+
+        if preferred:
+            out = {}
+            used = set()
+            for name in preferred:
+                lname = name.lower()
+                hit = None
+                for key in sorted(by_key.keys()):
+                    lk = key.lower()
+                    if lk == lname or lk.endswith("_" + lname):
+                        hit = key
+                        break
+                if hit is not None:
+                    used.add(hit)
+                    out[name] = by_key[hit]
+            if out:
+                return out
+
+        return {k: by_key[k] for k in sorted(by_key.keys())}
+
+    # -----------------------------------------------------------------------
+    # selector GUI
+    # -----------------------------------------------------------------------
+    def _get_episode_meta(self, bag_path):
+        metadata = self._load_episode_metadata(bag_path)
         try:
-            with h5py.File(path, "r") as f:
-                n = int(f[self.key_timestamps].shape[0]) if self.key_timestamps in f else 0
-                cams = list(f[self.key_cameras_group].keys()) \
-                    if self.key_cameras_group in f else []
-                return n, cams
+            with rosbag.Bag(bag_path, "r") as bag:
+                topic_info = bag.get_type_and_topic_info().topics
+                bag_topics = sorted(topic_info.keys())
         except Exception:
             return 0, []
 
-    # ── episode selector GUI ──────────────────────────────────────
+        pair_map = self._resolve_pair_source_topics(bag_topics, metadata, strict=False)
+        n_frames = 0
+        if pair_map:
+            anchor_pair = self.arm_pairs[0]["name"]
+            anchor_topic = pair_map.get(anchor_pair)
+            if anchor_topic:
+                n_frames = self._topic_message_count(topic_info, anchor_topic)
+
+        cam_map = self._resolve_camera_topics(bag_topics, metadata, strict=False)
+        return n_frames, sorted(cam_map.keys())
+
     def _show_episode_selector(self):
-        """
-        Show a full-window episode list. Returns the selected episode dict
-        {"eid": int, "path": str, "n_frames": int, "cams": list} or None.
-        """
         all_eps = self._scan_all_episodes()
         if not all_eps:
-            rospy.logerr("[GUI] no episode_*.hdf5 found in %s", self.data_dir)
+            rospy.logerr("[GUI] no episode_*/episode*.bag found in %s", self.data_dir)
             return None
 
-        # Build metadata list, newest episode first
         ep_list = []
-        for eid, path in reversed(all_eps):
-            n_frames, cam_names = self._get_episode_meta(path)
-            ep_list.append({"eid": eid, "path": path, "n_frames": n_frames, "cams": cam_names})
+        for ep in reversed(all_eps):
+            n_frames, cam_names = self._get_episode_meta(ep["path"])
+            item = dict(ep)
+            item["n_frames"] = n_frames
+            item["cams"] = cam_names
+            ep_list.append(item)
 
-        W, H = 760, 520
+        w, h = 820, 560
         cv2.namedWindow(self.gui_window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-        cv2.resizeWindow(self.gui_window_name, W, H)
+        cv2.resizeWindow(self.gui_window_name, w, h)
 
-        sel = 0          # currently highlighted index
-        ITEM_H = 54
-        LIST_Y = 60
-        FOOTER_H = 60
+        sel = 0
+        item_h = 60
+        list_y = 60
+        footer_h = 64
 
         while not rospy.is_shutdown():
-            canvas = np.full((H, W, 3), 28, dtype=np.uint8)
+            canvas = np.full((h, w, 3), 28, dtype=np.uint8)
 
-            # ── title bar ──
-            cv2.rectangle(canvas, (0, 0), (W, LIST_Y - 4), (40, 42, 65), -1)
-            cv2.putText(canvas, "SELECT EPISODE TO REPLAY",
-                        (16, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (220, 220, 255), 1)
-            cv2.line(canvas, (0, LIST_Y - 4), (W, LIST_Y - 4), (70, 70, 100), 1)
+            cv2.rectangle(canvas, (0, 0), (w, list_y - 4), (40, 42, 65), -1)
+            cv2.putText(
+                canvas, "SELECT BAG EPISODE TO REPLAY", (16, 38),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.72, (220, 220, 255), 1
+            )
+            cv2.line(canvas, (0, list_y - 4), (w, list_y - 4), (70, 70, 100), 1)
 
-            # ── episode list ──
-            n_visible = (H - LIST_Y - FOOTER_H) // ITEM_H
+            n_visible = (h - list_y - footer_h) // item_h
             scroll = max(0, sel - n_visible // 2)
             scroll = max(0, min(scroll, max(0, len(ep_list) - n_visible)))
 
             for disp_i, ep_i in enumerate(range(scroll, min(scroll + n_visible, len(ep_list)))):
                 ep = ep_list[ep_i]
-                y = LIST_Y + disp_i * ITEM_H
-                is_sel = (ep_i == sel)
+                y = list_y + disp_i * item_h
+                is_sel = ep_i == sel
 
                 bg_col = (42, 72, 118) if is_sel else (38, 38, 38)
                 border_col = (100, 160, 245) if is_sel else (52, 52, 52)
-                cv2.rectangle(canvas, (8, y + 2), (W - 8, y + ITEM_H - 2), bg_col, -1)
-                cv2.rectangle(canvas, (8, y + 2), (W - 8, y + ITEM_H - 2), border_col, 1)
+                cv2.rectangle(canvas, (8, y + 2), (w - 8, y + item_h - 2), bg_col, -1)
+                cv2.rectangle(canvas, (8, y + 2), (w - 8, y + item_h - 2), border_col, 1)
 
                 arrow = "> " if is_sel else "  "
                 title_col = (255, 255, 255) if is_sel else (175, 175, 175)
-                cv2.putText(canvas,
-                            "{}episode_{}.hdf5".format(arrow, ep["eid"]),
-                            (22, y + 24),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.62, title_col, 1)
+                title = "{}{}  (id={:03d})".format(arrow, ep["display"], ep["eid"])
+                cv2.putText(
+                    canvas, title, (22, y + 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, title_col, 1
+                )
 
                 cam_str = ", ".join(ep["cams"]) if ep["cams"] else "no cameras"
                 info = "{} frames  |  cameras: {}".format(ep["n_frames"], cam_str)
                 info_col = (110, 200, 120) if is_sel else (90, 130, 90)
-                cv2.putText(canvas, info,
-                            (35, y + 44),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.42, info_col, 1)
+                cv2.putText(
+                    canvas, info, (35, y + 46),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, info_col, 1
+                )
 
-            # ── scroll indicator ──
             if len(ep_list) > n_visible:
-                track_h = H - LIST_Y - FOOTER_H
+                track_h = h - list_y - footer_h
                 thumb_h = max(20, track_h * n_visible // len(ep_list))
-                thumb_y = LIST_Y + track_h * scroll // len(ep_list)
-                cv2.rectangle(canvas, (W - 6, LIST_Y), (W - 2, LIST_Y + track_h), (50, 50, 50), -1)
-                cv2.rectangle(canvas, (W - 6, thumb_y), (W - 2, thumb_y + thumb_h), (120, 120, 180), -1)
+                thumb_y = list_y + track_h * scroll // len(ep_list)
+                cv2.rectangle(canvas, (w - 6, list_y), (w - 2, list_y + track_h), (50, 50, 50), -1)
+                cv2.rectangle(canvas, (w - 6, thumb_y), (w - 2, thumb_y + thumb_h), (120, 120, 180), -1)
 
-            # ── footer ──
-            cv2.rectangle(canvas, (0, H - FOOTER_H), (W, H), (38, 38, 38), -1)
-            cv2.line(canvas, (0, H - FOOTER_H), (W, H - FOOTER_H), (65, 65, 65), 1)
-            cv2.putText(canvas,
-                        "[W/S] Navigate    [ENTER] Start Replay    [Q/ESC] Quit",
-                        (16, H - FOOTER_H + 24),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.47, (155, 155, 155), 1)
-            cv2.putText(canvas,
-                        "{} episode(s)  in  {}".format(len(ep_list), self.data_dir),
-                        (16, H - FOOTER_H + 46),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (90, 90, 90), 1)
+            cv2.rectangle(canvas, (0, h - footer_h), (w, h), (38, 38, 38), -1)
+            cv2.line(canvas, (0, h - footer_h), (w, h - footer_h), (65, 65, 65), 1)
+            cv2.putText(
+                canvas, "[W/S] Navigate    [ENTER] Start Replay    [Q/ESC] Quit",
+                (16, h - footer_h + 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.47, (155, 155, 155), 1
+            )
+            cv2.putText(
+                canvas, "{} episode(s)  in  {}".format(len(ep_list), self.data_dir),
+                (16, h - footer_h + 48),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (90, 90, 90), 1
+            )
 
             cv2.imshow(self.gui_window_name, canvas)
             key = cv2.waitKey(50)
@@ -487,151 +863,275 @@ class TeleopRawReplay:
                 continue
             kc = key & 0xFF
 
-            if kc in (ord('q'), ord('Q'), 27):       # Q or ESC → quit
+            if kc in (ord("q"), ord("Q"), 27):
                 return None
-            elif kc in (ord('w'), ord('W')) or key == 82:   # W or ↑
+            if kc in (ord("w"), ord("W")) or key == 82:
                 sel = max(0, sel - 1)
-            elif kc in (ord('s'), ord('S')) or key == 84:   # S or ↓
+                continue
+            if kc in (ord("s"), ord("S")) or key == 84:
                 sel = min(len(ep_list) - 1, sel + 1)
-            elif kc == 13:                            # ENTER → confirm
+                continue
+            if kc == 13:
                 return ep_list[sel]
 
         return None
 
-    # ── episode loading ───────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # load episode from bag
+    # -----------------------------------------------------------------------
     def _resolve_episode(self):
         if self.episode_file:
             candidate = os.path.expanduser(self.episode_file)
             if not os.path.isabs(candidate):
                 candidate = os.path.join(self.data_dir, candidate)
             candidate = os.path.abspath(candidate)
-            if not os.path.isfile(candidate):
+
+            if os.path.isdir(candidate):
+                bag_path = self._find_bag_in_episode_dir(candidate)
+                if not bag_path:
+                    raise RuntimeError(
+                        "episode_file dir has no episode*.bag: {}".format(candidate)
+                    )
+                candidate = bag_path
+            elif not os.path.isfile(candidate):
                 raise RuntimeError("episode_file not found: {}".format(candidate))
+
+            if not candidate.endswith(".bag"):
+                raise RuntimeError("episode_file must be .bag file or episode dir: {}".format(candidate))
+
+            ep_dir = os.path.basename(os.path.dirname(candidate))
+            ep_match = re.match(r"^episode_(\d+)$", ep_dir)
+            ep_id = int(ep_match.group(1)) if ep_match else -1
+            parent = os.path.abspath(os.path.dirname(os.path.dirname(candidate)))
+            session_name = ""
+            if parent == os.path.abspath(self.data_dir):
+                session_name = ""
+            else:
+                session_name = os.path.basename(os.path.dirname(candidate))
+            display = ep_dir if not session_name else "{}/{}".format(session_name, ep_dir)
+
             self.selected_episode_path = candidate
-            match = re.match(r"^episode_(\d+)\.hdf5$", os.path.basename(candidate))
-            self.selected_episode_id = int(match.group(1)) if match else -1
+            self.selected_episode_id = ep_id
+            self.selected_episode_label = display
             return
 
-        files = []
-        for name in os.listdir(self.data_dir):
-            m = re.match(r"^episode_(\d+)\.hdf5$", name)
-            if m:
-                files.append((int(m.group(1)), os.path.join(self.data_dir, name)))
-
-        if not files:
-            raise RuntimeError("no episode_*.hdf5 found in {}".format(self.data_dir))
-
-        files.sort(key=lambda x: x[0])
-        available_ids = [eid for eid, _ in files]
+        all_eps = self._scan_all_episodes()
+        if not all_eps:
+            raise RuntimeError("no episode_*/episode*.bag found in {}".format(self.data_dir))
 
         if self.episode_id < 0:
-            self.selected_episode_id, self.selected_episode_path = files[-1]
+            sel = all_eps[-1]
         else:
-            hit = [item for item in files if item[0] == self.episode_id]
-            if not hit:
+            hits = [ep for ep in all_eps if ep["eid"] == self.episode_id]
+            if not hits:
+                ids = sorted(set(ep["eid"] for ep in all_eps))
                 raise RuntimeError(
-                    "episode_{}.hdf5 not found in {} (available ids: {})".format(
-                        self.episode_id, self.data_dir, available_ids
+                    "episode id {} not found in {} (available ids: {})".format(
+                        self.episode_id, self.data_dir, ids
                     )
                 )
-            self.selected_episode_id, self.selected_episode_path = hit[0]
+            sel = hits[-1]
+
+        self.selected_episode_path = sel["path"]
+        self.selected_episode_id = sel["eid"]
+        self.selected_episode_label = sel["display"]
 
     def _load_episode(self):
         self._resolve_episode()
         rospy.loginfo(
-            "[LOAD] episode id=%s  path=%s",
+            "[LOAD] episode id=%s path=%s",
             self.selected_episode_id if self.selected_episode_id >= 0 else "unknown",
             self.selected_episode_path,
         )
 
-        with h5py.File(self.selected_episode_path, "r") as f:
-            if self.key_timestamps not in f:
-                raise RuntimeError("missing key '/{}' in {}".format(
-                    self.key_timestamps, self.selected_episode_path))
-            if self.key_slaves_group not in f:
-                raise RuntimeError("missing key '/{}' in {}".format(
-                    self.key_slaves_group, self.selected_episode_path))
+        self.selected_episode_metadata = self._load_episode_metadata(self.selected_episode_path)
 
-            timestamps = np.asarray(f[self.key_timestamps], dtype=np.float64).reshape(-1)
-            if timestamps.size == 0:
-                raise RuntimeError("timestamps is empty in {}".format(self.selected_episode_path))
+        with rosbag.Bag(self.selected_episode_path, "r") as bag:
+            topic_info = bag.get_type_and_topic_info().topics
+            bag_topics = sorted(topic_info.keys())
+            pair_topic_map = self._resolve_pair_source_topics(
+                bag_topics, self.selected_episode_metadata, strict=True
+            )
+            topic_to_pair = {topic: name for name, topic in pair_topic_map.items()}
+            needed_topics = sorted(topic_to_pair.keys())
 
-            slaves_group = f[self.key_slaves_group]
-            replay_pos = {}
-            lengths = [int(timestamps.shape[0])]
+            rospy.loginfo("[LOAD] replay topics: %s", pair_topic_map)
+            for topic in needed_topics:
+                cnt = self._topic_message_count(topic_info, topic)
+                rospy.loginfo("[LOAD]   %s  msgs=%d", topic, cnt)
 
-            for pair in self.arm_pairs:
-                pair_name = pair["name"]
-                if pair_name not in slaves_group:
-                    raise RuntimeError(
-                        "missing group '/{}/{}' in {}".format(
-                            self.key_slaves_group, pair_name, self.selected_episode_path))
-                pair_group = slaves_group[pair_name]
-                if "positions" not in pair_group:
-                    raise RuntimeError(
-                        "missing dataset '/{}/{}/positions' in {}".format(
-                            self.key_slaves_group, pair_name, self.selected_episode_path))
+            pair_ts = {p["name"]: [] for p in self.arm_pairs}
+            pair_pos = {p["name"]: [] for p in self.arm_pairs}
 
-                pos = np.asarray(pair_group["positions"], dtype=np.float32)
-                if pos.ndim == 1:
-                    pos = pos.reshape(1, -1)
-                if pos.ndim != 2:
-                    raise RuntimeError(
-                        "invalid shape for '/{}/{}/positions': {}".format(
-                            self.key_slaves_group, pair_name, pos.shape))
-                replay_pos[pair_name] = pos
-                lengths.append(int(pos.shape[0]))
+            for topic, msg, bag_t in bag.read_messages(topics=needed_topics):
+                pair_name = topic_to_pair.get(topic)
+                if pair_name is None:
+                    continue
+                pair_ts[pair_name].append(msg_stamp(msg, bag_t))
+                pair_pos[pair_name].append(
+                    np.asarray(
+                        fix_len(getattr(msg, "position", []), 7, 0.0),
+                        dtype=np.float32,
+                    )
+                )
 
-        common_len = min(lengths)
-        if common_len <= 0:
-            raise RuntimeError("no usable frames in {}".format(self.selected_episode_path))
+        for p in self.arm_pairs:
+            name = p["name"]
+            if not pair_ts[name]:
+                raise RuntimeError(
+                    "bag has no messages for replay pair {} (topic {})".format(
+                        name, pair_topic_map.get(name)
+                    )
+                )
 
-        if len(set(lengths)) != 1:
-            rospy.logwarn(
-                "[LOAD] length mismatch timestamps/positions=%s, trim to common_len=%d",
-                lengths, common_len)
+        anchor_pair = self.arm_pairs[0]["name"]
+        anchor_ts = np.asarray(pair_ts[anchor_pair], dtype=np.float64).reshape(-1)
+        if anchor_ts.size <= 0:
+            raise RuntimeError("anchor pair '{}' has zero frames".format(anchor_pair))
 
-        self.timestamps = timestamps[:common_len]
-        self.replay_pos = {}
-        for pair_name, pos in replay_pos.items():
-            trimmed = pos[:common_len]
-            normalized = np.zeros((common_len, 7), dtype=np.float32)
-            for i in range(common_len):
-                normalized[i] = np.asarray(fix_len(trimmed[i], 7, 0.0), dtype=np.float32)
-            self.replay_pos[pair_name] = normalized
+        replay_pos = {}
+        for p in self.arm_pairs:
+            name = p["name"]
+            ts_arr = np.asarray(pair_ts[name], dtype=np.float64).reshape(-1)
+            pos_arr = np.asarray(pair_pos[name], dtype=np.float32)
+            if pos_arr.ndim == 1:
+                pos_arr = pos_arr.reshape(1, -1)
 
-        self.frame_count = common_len
-        rospy.loginfo("[LOAD] frames=%d  pairs=%s", self.frame_count, list(self.replay_pos.keys()))
+            j = 0
+            out = np.zeros((anchor_ts.shape[0], 7), dtype=np.float32)
+            for i, ft in enumerate(anchor_ts):
+                while (j + 1) < ts_arr.shape[0] and ts_arr[j + 1] <= ft:
+                    j += 1
+                out[i] = np.asarray(fix_len(pos_arr[j], 7, 0.0), dtype=np.float32)
+            replay_pos[name] = out
 
-    # ── camera images ──────────────────────────────────────────────
+        self.timestamps = anchor_ts
+        self.replay_pos = replay_pos
+        self.replay_joint_topic_map = pair_topic_map
+        self.frame_count = int(anchor_ts.shape[0])
+        rospy.loginfo("[LOAD] frames=%d pairs=%s", self.frame_count, list(self.replay_pos.keys()))
+
+    # -----------------------------------------------------------------------
+    # load camera frames from bag
+    # -----------------------------------------------------------------------
     def _load_camera_images(self):
-        """Load color images from HDF5 into self.camera_images (BGR, uint8)."""
         self.camera_images = {}
-        try:
-            with h5py.File(self.selected_episode_path, "r") as f:
-                if self.key_cameras_group not in f:
-                    rospy.loginfo("[GUI] no '%s' group in HDF5, camera view skipped",
-                                  self.key_cameras_group)
-                    return
-                cams_group = f[self.key_cameras_group]
-                for cam_name in sorted(cams_group.keys()):
-                    if self.gui_show_cameras and cam_name not in self.gui_show_cameras:
-                        continue
-                    cam_grp = cams_group[cam_name]
-                    if "color" not in cam_grp:
-                        continue
-                    imgs = np.asarray(cam_grp["color"])          # (N, H, W, 3) BGR uint8
-                    n = min(imgs.shape[0], self.frame_count)
-                    self.camera_images[cam_name] = imgs[:n]
-                    rospy.loginfo("[GUI] camera '%s': %s", cam_name,
-                                  self.camera_images[cam_name].shape)
-        except Exception as exc:
-            rospy.logwarn("[GUI] failed to load camera images: %s", exc)
+        self.camera_topic_map = {}
 
-    # ── GUI frame builders ────────────────────────────────────────
+        try:
+            with rosbag.Bag(self.selected_episode_path, "r") as bag:
+                bag_topics = sorted(bag.get_type_and_topic_info().topics.keys())
+                cam_map = self._resolve_camera_topics(
+                    bag_topics, self.selected_episode_metadata, strict=False
+                )
+                if not cam_map:
+                    rospy.loginfo("[GUI] no camera topics found in bag, camera view skipped")
+                    return
+
+                topic_to_cam = {topic: name for name, topic in cam_map.items()}
+                cam_topics = sorted(topic_to_cam.keys())
+                self.camera_topic_map = cam_map
+                rospy.loginfo("[GUI] camera topics: %s", cam_map)
+
+                cam_ts = {name: [] for name in cam_map.keys()}
+                for topic, msg, bag_t in bag.read_messages(topics=cam_topics):
+                    cam_name = topic_to_cam.get(topic)
+                    if cam_name is None:
+                        continue
+                    cam_ts[cam_name].append(msg_stamp(msg, bag_t))
+
+            valid_cams = {}
+            for cam_name, ts_list in cam_ts.items():
+                if ts_list:
+                    valid_cams[cam_name] = ts_list
+                else:
+                    rospy.logwarn("[GUI] camera '%s' has zero messages, skip", cam_name)
+
+            if not valid_cams:
+                rospy.loginfo("[GUI] no usable camera streams")
+                return
+
+            cam_need_idx_to_frames = {}
+            for cam_name, ts_list in valid_cams.items():
+                j = 0
+                need = {}
+                for fi, ft in enumerate(self.timestamps):
+                    while (j + 1) < len(ts_list) and ts_list[j + 1] <= ft:
+                        j += 1
+                    need.setdefault(j, []).append(fi)
+                cam_need_idx_to_frames[cam_name] = need
+
+            cam_frames = {name: [None] * self.frame_count for name in valid_cams.keys()}
+            cam_seen_idx = {name: 0 for name in valid_cams.keys()}
+            decode_fail = {name: 0 for name in valid_cams.keys()}
+            cam_topics = sorted(
+                [topic for topic, name in topic_to_cam.items() if name in valid_cams]
+            )
+
+            with rosbag.Bag(self.selected_episode_path, "r") as bag:
+                for topic, msg, _bag_t in bag.read_messages(topics=cam_topics):
+                    cam_name = topic_to_cam.get(topic)
+                    if cam_name not in valid_cams:
+                        continue
+                    src_idx = cam_seen_idx[cam_name]
+                    cam_seen_idx[cam_name] += 1
+                    frame_ids = cam_need_idx_to_frames[cam_name].get(src_idx)
+                    if not frame_ids:
+                        continue
+
+                    img = decode_color_image(msg)
+                    if img is None:
+                        decode_fail[cam_name] += 1
+                        continue
+                    for fi in frame_ids:
+                        cam_frames[cam_name][fi] = img.copy()
+
+            for cam_name, fail_n in decode_fail.items():
+                if fail_n > 0:
+                    rospy.logwarn("[GUI] camera '%s' decode failures=%d", cam_name, fail_n)
+
+            for cam_name, frames in cam_frames.items():
+                first_valid = None
+                for img in frames:
+                    if img is not None:
+                        first_valid = img
+                        break
+                if first_valid is None:
+                    rospy.logwarn("[GUI] camera '%s' has no decodable frames", cam_name)
+                    continue
+
+                if first_valid.ndim == 2:
+                    first_valid = cv2.cvtColor(first_valid, cv2.COLOR_GRAY2BGR)
+                if first_valid.ndim == 3 and first_valid.shape[2] == 4:
+                    first_valid = cv2.cvtColor(first_valid, cv2.COLOR_BGRA2BGR)
+
+                h0, w0 = first_valid.shape[:2]
+                last = first_valid
+                for i in range(self.frame_count):
+                    img = frames[i]
+                    if img is None:
+                        frames[i] = last.copy()
+                        continue
+                    if img.ndim == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+                    elif img.ndim == 3 and img.shape[2] == 4:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    if img.shape[0] != h0 or img.shape[1] != w0:
+                        img = cv2.resize(img, (w0, h0), interpolation=cv2.INTER_LINEAR)
+                    frames[i] = img
+                    last = img
+
+                arr = np.stack(frames, axis=0).astype(np.uint8)
+                self.camera_images[cam_name] = arr
+                rospy.loginfo("[GUI] camera '%s': %s", cam_name, arr.shape)
+        except Exception as exc:
+            rospy.logwarn("[GUI] failed to load camera images from bag: %s", exc)
+
+    # -----------------------------------------------------------------------
+    # GUI frame builders
+    # -----------------------------------------------------------------------
     def _build_replay_frame(self, frame_idx, paused):
-        """Build the composite OpenCV frame shown during replay."""
-        TW, TH = self.gui_thumb_w, self.gui_thumb_h
+        tw, th = self.gui_thumb_w, self.gui_thumb_h
 
         cam_names = sorted(self.camera_images.keys())
         n_cams = len(cam_names)
@@ -641,110 +1141,111 @@ class TeleopRawReplay:
             for name in cam_names:
                 imgs = self.camera_images[name]
                 if frame_idx < imgs.shape[0]:
-                    img = imgs[frame_idx]          # already BGR
-                    thumb = cv2.resize(img, (TW, TH), interpolation=cv2.INTER_LINEAR)
+                    img = imgs[frame_idx]
+                    thumb = cv2.resize(img, (tw, th), interpolation=cv2.INTER_LINEAR)
                 else:
-                    thumb = np.zeros((TH, TW, 3), dtype=np.uint8)
-                # camera name label
-                cv2.putText(thumb, name, (6, 24),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 60), 1,
-                            cv2.LINE_AA)
+                    thumb = np.zeros((th, tw, 3), dtype=np.uint8)
+                cv2.putText(
+                    thumb, name, (6, 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 60), 1, cv2.LINE_AA
+                )
                 thumbs.append(thumb)
 
-            # arrange in rows of up to 3 columns
-            COLS = min(n_cams, 3)
-            while len(thumbs) % COLS != 0:
-                thumbs.append(np.zeros((TH, TW, 3), dtype=np.uint8))
-            rows = [np.hstack(thumbs[i * COLS:(i + 1) * COLS])
-                    for i in range(len(thumbs) // COLS)]
+            cols = min(n_cams, 3)
+            while len(thumbs) % cols != 0:
+                thumbs.append(np.zeros((th, tw, 3), dtype=np.uint8))
+            rows = [np.hstack(thumbs[i * cols:(i + 1) * cols]) for i in range(len(thumbs) // cols)]
             cam_panel = np.vstack(rows)
         else:
-            # placeholder when no cameras
-            cam_panel = np.full((TH, TW * 2, 3), 28, dtype=np.uint8)
-            cv2.putText(cam_panel, "No camera images in this episode",
-                        (18, TH // 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 80), 1)
+            cam_panel = np.full((th, tw * 2, 3), 28, dtype=np.uint8)
+            cv2.putText(
+                cam_panel, "No camera images in this episode", (18, th // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 80), 1
+            )
 
         panel_w = cam_panel.shape[1]
 
-        # ── status bar ──
-        SB_H = 110
-        sb = np.full((SB_H, panel_w, 3), 33, dtype=np.uint8)
+        sb_h = 110
+        sb = np.full((sb_h, panel_w, 3), 33, dtype=np.uint8)
 
-        # progress bar
-        M = 14
-        BAR_H = 15
-        bar_w = panel_w - 2 * M
+        m = 14
+        bar_h = 15
+        bar_w = panel_w - 2 * m
         progress = (frame_idx + 1) / max(self.frame_count, 1)
         filled = int(bar_w * progress)
-        cv2.rectangle(sb, (M, M), (M + bar_w, M + BAR_H), (52, 52, 52), -1)
-        cv2.rectangle(sb, (M, M), (M + filled, M + BAR_H), (50, 180, 70), -1)
-        cv2.rectangle(sb, (M, M), (M + bar_w, M + BAR_H), (105, 105, 105), 1)
+        cv2.rectangle(sb, (m, m), (m + bar_w, m + bar_h), (52, 52, 52), -1)
+        cv2.rectangle(sb, (m, m), (m + filled, m + bar_h), (50, 180, 70), -1)
+        cv2.rectangle(sb, (m, m), (m + bar_w, m + bar_h), (105, 105, 105), 1)
 
-        # text lines
-        ep_bn = os.path.basename(self.selected_episode_path)
+        ep_label = self.selected_episode_label or os.path.basename(self.selected_episode_path)
         state_lbl = "PAUSED" if paused else "PLAYING"
         loop_lbl = "LOOP:ON" if self.loop else "LOOP:OFF"
         line1 = "{}   Frame {}/{}   Speed {:.1f}x   [{}]   {}".format(
-            ep_bn, frame_idx + 1, self.frame_count,
-            self.speed_scale, state_lbl, loop_lbl)
+            ep_label, frame_idx + 1, self.frame_count, self.speed_scale, state_lbl, loop_lbl
+        )
         line2 = "[SPACE] Pause/Resume   [L] Loop   [+/-] Speed   [Q/ESC] Quit"
 
-        cv2.putText(sb, line1, (M, M + BAR_H + 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (215, 215, 215), 1)
-        cv2.putText(sb, line2, (M, M + BAR_H + 46),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (125, 125, 125), 1)
+        cv2.putText(
+            sb, line1, (m, m + bar_h + 22),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.44, (215, 215, 215), 1
+        )
+        cv2.putText(
+            sb, line2, (m, m + bar_h + 46),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.40, (125, 125, 125), 1
+        )
 
-        # arm pair info
         pair_names = "  ".join(p["name"] for p in self.arm_pairs)
-        cv2.putText(sb, "Arms: " + pair_names, (M, M + BAR_H + 70),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (90, 140, 190), 1)
+        cv2.putText(
+            sb, "Arms: " + pair_names, (m, m + bar_h + 70),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (90, 140, 190), 1
+        )
 
         return np.vstack([cam_panel, sb])
 
     def _build_reset_frame(self):
-        """Build an overlay shown while the arm is doing its slow reset."""
         if self.frame_count > 0:
             base = self._build_replay_frame(0, False)
         else:
             base = np.full((300, 640, 3), 33, dtype=np.uint8)
 
         overlay = base.copy()
-        cv2.rectangle(overlay, (0, 0), (base.shape[1], base.shape[0]),
-                      (15, 15, 15), -1)
+        cv2.rectangle(overlay, (0, 0), (base.shape[1], base.shape[0]), (15, 15, 15), -1)
         cv2.addWeighted(overlay, 0.55, base, 0.45, 0, base)
 
         cx, cy = base.shape[1] // 2, base.shape[0] // 2
-        cv2.putText(base, "RESETTING TO START POSITION...",
-                    (cx - 220, cy - 18),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.80, (255, 200, 50), 2, cv2.LINE_AA)
-        cv2.putText(base, "Slowly moving arm to initial pose",
-                    (cx - 175, cy + 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (175, 175, 175), 1)
+        cv2.putText(
+            base, "RESETTING TO START POSITION...", (cx - 220, cy - 18),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.80, (255, 200, 50), 2, cv2.LINE_AA
+        )
+        cv2.putText(
+            base, "Slowly moving arm to initial pose", (cx - 175, cy + 22),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.52, (175, 175, 175), 1
+        )
         return base
 
-    # ── keyboard handler ──────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # keyboard + replay core
+    # -----------------------------------------------------------------------
     def _handle_key(self, key):
         if key == -1:
             return
         kc = key & 0xFF
-        if kc in (ord('q'), ord('Q'), 27):
+        if kc in (ord("q"), ord("Q"), 27):
             self.stop_requested = True
             rospy.loginfo("[GUI] stop requested by user")
-        elif kc == ord(' '):
+        elif kc == ord(" "):
             self.paused = not self.paused
             rospy.loginfo("[GUI] paused=%s", self.paused)
-        elif kc in (ord('l'), ord('L')):
+        elif kc in (ord("l"), ord("L")):
             self.loop = not self.loop
             rospy.loginfo("[GUI] loop=%s", self.loop)
-        elif kc in (ord('+'), ord('=')):
+        elif kc in (ord("+"), ord("=")):
             self.speed_scale = min(self.speed_scale * 1.5, 10.0)
             rospy.loginfo("[GUI] speed_scale=%.2f", self.speed_scale)
-        elif kc == ord('-'):
+        elif kc == ord("-"):
             self.speed_scale = max(self.speed_scale / 1.5, 0.1)
             rospy.loginfo("[GUI] speed_scale=%.2f", self.speed_scale)
 
-    # ── core replay logic (unchanged) ────────────────────────────
     def _build_joint_msg(self, position7):
         msg = JointState()
         msg.header.stamp = rospy.Time.now()
@@ -815,7 +1316,7 @@ class TeleopRawReplay:
                 return False
             rate.sleep()
             if self.gui_enabled:
-                cv2.waitKey(1)   # keep window responsive
+                cv2.waitKey(1)
 
         settle_end = time.time() + self.reset_settle_hold_sec
         while not rospy.is_shutdown() and time.time() < settle_end:
@@ -853,7 +1354,6 @@ class TeleopRawReplay:
         scaled = raw / self.speed_scale
         return clamp(scaled, self.min_dt_sec, self.max_dt_sec)
 
-    # ── headless replay (no GUI) ──────────────────────────────────
     def _play_once(self):
         rospy.loginfo("[REPLAY] start frames=%d speed_scale=%.3f", self.frame_count, self.speed_scale)
         last_log = time.time()
@@ -875,7 +1375,6 @@ class TeleopRawReplay:
         rospy.loginfo("[REPLAY] done")
         return True
 
-    # ── GUI replay ────────────────────────────────────────────────
     def _play_once_with_gui(self):
         rospy.loginfo("[REPLAY] start frames=%d speed_scale=%.3f", self.frame_count, self.speed_scale)
         last_log = time.time()
@@ -884,21 +1383,17 @@ class TeleopRawReplay:
             if rospy.is_shutdown() or self.stop_requested:
                 return False
 
-            # ── pause loop ──
             while self.paused and not rospy.is_shutdown() and not self.stop_requested:
                 cv2.imshow(self.gui_window_name, self._build_replay_frame(idx, True))
                 self._handle_key(cv2.waitKey(80))
             if rospy.is_shutdown() or self.stop_requested:
                 return False
 
-            # ── publish joint positions ──
             cmd = {p["name"]: self.replay_pos[p["name"]][idx] for p in self.arm_pairs}
             self._publish_positions(cmd)
 
-            # ── show camera + status frame ──
             cv2.imshow(self.gui_window_name, self._build_replay_frame(idx, False))
 
-            # ── inter-frame sleep (GUI-friendly) ──
             dt = self._compute_dt(idx)
             if dt is not None and dt > 0.0:
                 deadline = time.time() + dt
@@ -908,12 +1403,11 @@ class TeleopRawReplay:
                         break
                     wait_ms = max(1, min(int(remaining * 1000), 50))
                     self._handle_key(cv2.waitKey(wait_ms))
-                    # handle pause triggered during the sleep
                     if self.paused:
                         while self.paused and not rospy.is_shutdown() and not self.stop_requested:
                             cv2.imshow(self.gui_window_name, self._build_replay_frame(idx, True))
                             self._handle_key(cv2.waitKey(80))
-                        deadline = time.time()   # resume immediately
+                        deadline = time.time()
             else:
                 self._handle_key(cv2.waitKey(1))
 
@@ -925,7 +1419,6 @@ class TeleopRawReplay:
         rospy.loginfo("[REPLAY] done")
         return True
 
-    # ── hold last ─────────────────────────────────────────────────
     def _hold_last(self):
         if self.hold_last_sec <= 0.0:
             return
@@ -941,21 +1434,22 @@ class TeleopRawReplay:
             if self.gui_enabled:
                 cv2.waitKey(1)
 
-    # ── main run ──────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # main
+    # -----------------------------------------------------------------------
     def run(self):
         if not self._wait_slave_states_ready():
             return
 
-        # ── GUI episode selector ──
         if self.gui_enabled and self.gui_show_selector:
             ep = self._show_episode_selector()
             if ep is None:
                 rospy.loginfo("[GUI] user cancelled episode selection, exiting")
                 cv2.destroyAllWindows()
                 return
-            # Override config selection with GUI choice
             self.episode_file = ep["path"]
             self.episode_id = ep["eid"]
+            self.selected_episode_label = ep["display"]
 
         self._load_episode()
 
@@ -989,19 +1483,19 @@ class TeleopRawReplay:
             if not self.loop:
                 break
 
-        # ── show completion frame ──
         if self.gui_enabled and not rospy.is_shutdown() and self.frame_count > 0:
             done_frame = self._build_replay_frame(self.frame_count - 1, False)
             h, w = done_frame.shape[:2]
             cv2.rectangle(done_frame, (0, h // 2 - 30), (w, h // 2 + 30), (20, 20, 20), -1)
-            cv2.putText(done_frame, "REPLAY COMPLETE — press any key to exit",
-                        (w // 2 - 230, h // 2 + 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.70, (80, 230, 100), 2, cv2.LINE_AA)
+            cv2.putText(
+                done_frame, "REPLAY COMPLETE - press any key to exit",
+                (w // 2 - 230, h // 2 + 8),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.70, (80, 230, 100), 2, cv2.LINE_AA
+            )
             cv2.imshow(self.gui_window_name, done_frame)
             cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    # ── cleanup ───────────────────────────────────────────────────
     def close(self):
         if self.launcher is not None:
             try:
@@ -1013,8 +1507,6 @@ class TeleopRawReplay:
         except Exception:
             pass
 
-
-# ─────────────────────────── entry point ───────────────────────────
 
 def main():
     node = None

@@ -1,11 +1,12 @@
 # teleop_raw_replay.yaml
-# 目标：重播 teleop_raw_record 生成的 episode_*.hdf5
+# 目标：重播 teleop_raw_record_piperros_ff 生成的 BAG episode
 # 关键安全策略：默认启用回放前慢速复位，复位失败直接中止
 
 schema_version: 1
 
 global:
   data_dir: "/workspace/piper_master_slave_ws/data"
+  fallback_rate_hz: 30.0
   ctrl_startup_wait_sec: 2.0
   ctrl_ready_timeout_sec: 8.0
   min_dt_sec: 0.001
@@ -13,9 +14,13 @@ global:
 
 replay:
   # 非空时优先使用该文件（支持绝对路径；相对路径按 data_dir 解析）
+  # 可填 .bag 文件，或 episode_XXX 目录
   # 启用 GUI episode selector 时此项会被覆盖
   episode_file: ""
-  # -1: 最新 episode；>=0: episode_<id>.hdf5
+  # 可选：限定 session_name（对应 data_dir/session_name/episode_XXX）
+  # 为空时在 data_dir 下所有 session 中查找
+  session_name: ""
+  # -1: 最新 episode；>=0: episode_<id>（按目录名匹配）
   episode_id: -1
   # >1.0 更快，<1.0 更慢
   speed_scale: 1.0
@@ -48,7 +53,7 @@ piper_ctrl_defaults:
   can_judge_flag: false
   gripper_val_multiple: 1
 
-# 与录制侧 pair 名保持一致（用于匹配 HDF5: /slaves/{name}/positions）
+# 回播目标机械臂（当前控制端）
 arm_pairs:
   - name: "pair1"
     slave: "slave1"
@@ -58,18 +63,36 @@ arm_pairs:
     slave: "slave2"
     slave_can: "slave2"
 
+# BAG 读取配置
+bag:
+  # true: 优先参考 metadata.json 中 recorded topics
+  use_metadata_topics: true
+
+  # 可选：按 arm_pairs 顺序指定 BAG 中用于回播的 slave joint_states topic
+  # 例如:
+  #   - "/robot/arm_left/joint_states_single"
+  #   - "/robot/arm_right/joint_states_single"
+  slave_joint_state_topics: []
+
+  # 可选：按 pair 名精确指定 BAG topic（优先级高于 slave_joint_state_topics）
+  # 例如:
+  #   pair1: "/robot/arm_left/joint_states_single"
+  #   pair2: "/robot/arm_right/joint_states_single"
+  pair_slave_joint_topic_map: {}
+
+  # 可选：显式指定相机 topic（为空则自动推断）
+  # 例如:
+  #   left:  "/realsense_left/color/image_raw/compressed"
+  #   right: "/realsense_right/color/image_raw/compressed"
+  #   top:   "/realsense_top/color/image_raw/compressed"
+  camera_topics: {}
+
 
 ctrl_cmd:
   joint_velocity_default: 0.0
   joint_effort_default: 0.0
   gripper_velocity: 100.0
   gripper_effort: 1.0
-
-hdf5_keys:
-  timestamps: "timestamps"
-  slaves_group: "slaves"
-  # 录制时的相机组名（需与 teleop_raw_record.yaml hdf5_keys.cameras_group 一致）
-  cameras_group: "cameras"
 
 # ── OpenCV GUI 配置 ─────────────────────────────────────────────
 gui:

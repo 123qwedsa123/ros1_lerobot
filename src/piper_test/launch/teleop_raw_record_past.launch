@@ -1,14 +1,13 @@
 <launch>
   <!--
-    Teleop + Camera + Rosbag recorder (PiperROS force-feedback backend)
-    保存格式：rosbag，对齐 cheese-zj/catkin_ws/workspaces/scripts 格式
-    目录结构：data_dir/session_name/episode_001/episode.bag + metadata.json
-
+    Teleop + Camera + HDF5 recorder (PiperROS force-feedback backend)
     Usage:
       roslaunch piper_test teleop_raw_record_piperros_ff.launch
       roslaunch piper_test teleop_raw_record_piperros_ff.launch config:=/path/to/config.yaml
   -->
+
   <arg name="config" default="$(find piper_test)/config/teleop_raw_record_piperros_ff.yaml" />
+
   <node pkg="piper_test"
         type="teleop_raw_system_piperros_ff.py"
         name="teleop_raw_system_piperros_ff"

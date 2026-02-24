@@ -44,6 +44,8 @@ waypoints_data_joint/
 force_feedback_log.csv
 
 # lerobot local outputs (keep code, ignore generated data/assets)
+lerobot-server/act_data/
+lerobot-server/output/
 lerobot-server/test_checkpoint/
 lerobot-server/test_data/
 lerobot-server/output_test/

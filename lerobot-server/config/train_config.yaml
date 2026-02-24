@@ -1,0 +1,62 @@
+# train_config.yaml
+# 用法: python run_train.py --config config/train_config.yaml
+
+# 运行控制（命令、环境变量、是否 dry-run）
+runtime:
+  # 推荐写绝对路径，避免出现 "lerobot-train: not found"
+  command: "/home/jinhe/miniconda3/envs/lerobot-mujoco/bin/lerobot-train"
+  check_command: true
+  cwd: "."
+  dry_run: false
+  env:
+    CUDA_VISIBLE_DEVICES: "0"
+    # 可选: 屏蔽三方 warning
+    # PYTHONWARNINGS: "ignore"
+
+# 可复用变量（供 train_args 里使用 {变量名} 模板）
+variables:
+  dataset_id: "act"
+  dataset_root: "lerobot_data/lerobot"
+  output_root: "output"
+  run_name: "act_20260222_210318_chunk100_obs1_100k_bs8_amp"
+
+# 训练参数：全部从这里控制（键不带 --）
+# 支持嵌套写法，会自动展开成 --dataset.repo_id 这种形式
+train_args:
+  dataset:
+    repo_id: "{dataset_id}"
+    root: "{dataset_root}/{dataset_id}"
+    video_backend: "torchcodec"
+
+  policy:
+    type: "act"
+    device: "cuda"
+    repo_id: "local/{run_name}"
+    push_to_hub: false
+    use_amp: true
+
+    n_obs_steps: 1
+    chunk_size: 100
+    n_action_steps: 100
+
+  steps: 100000
+  batch_size: 8
+  num_workers: 4
+  save_freq: 10000
+  log_freq: 100
+
+  wandb:
+    mode: "disabled"
+
+  output_dir: "{output_root}/{run_name}"
+
+  # 继续训练开关
+  resume: false
+  # resume=true 时需要配置 config_path 指向已有 checkpoint 的 train_config.json
+  # config_path: "output/{run_name}/checkpoints/last/pretrained_model/train_config.json"
+
+# 仅开关型参数（无值），例如: ["help"] -> --help
+flags: []
+
+# 原样拼接到命令末尾，用于你临时传入特殊参数
+raw_args: []
